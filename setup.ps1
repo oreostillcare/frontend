@@ -147,9 +147,21 @@ try {
       -Example (Join-Path $backendDir ".env.example") `
       -Destination (Join-Path $backendDir ".env")
 
-    Write-Host "Downloading the standard YOLO model if it is not already available..."
+    $customModel = Join-Path $backendDir "models\best.pt"
+    if (-not (Test-Path -LiteralPath $customModel)) {
+      throw "The bundled custom model is missing at backend/models/best.pt. Restore it from the repository and rerun setup."
+    }
+
     Push-Location $backendDir
     try {
+      Write-Host "Validating the bundled custom traffic model..."
+      $expectedCustomClasses = "ambulance,bicycle,bus,ebike,etrike,jeepney,motorcycle,pickup,sedan,suv,tricycle,truck,van"
+      & $venvPython -c "from ultralytics import YOLO; expected=set('$expectedCustomClasses'.split(',')); actual={str(name).lower() for name in YOLO('models/best.pt').names.values()}; missing=expected-actual; assert not missing, f'Missing expected custom classes: {sorted(missing)}'; print('Custom model ready:', ', '.join(sorted(actual)))"
+      if ($LASTEXITCODE -ne 0) {
+        throw "Validating backend/models/best.pt failed with exit code $LASTEXITCODE."
+      }
+
+      Write-Host "Downloading the standard YOLO fallback model if it is not already available..."
       & $venvPython -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
       if ($LASTEXITCODE -ne 0) {
         throw "Downloading the YOLO model failed with exit code $LASTEXITCODE."

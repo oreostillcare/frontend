@@ -24,7 +24,6 @@ export default async function Layout({ children }: Readonly<{ children: ReactNod
 
   return (
     <ProtectedDashboard>
-      (
       <SidebarProvider
         defaultOpen={defaultOpen}
         style={
@@ -73,7 +72,6 @@ export default async function Layout({ children }: Readonly<{ children: ReactNod
           </div>
         </SidebarInset>
       </SidebarProvider>
-      )
     </ProtectedDashboard>
   );
 }

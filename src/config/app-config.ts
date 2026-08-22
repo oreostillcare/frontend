@@ -5,10 +5,9 @@ const currentYear = new Date().getFullYear();
 export const APP_CONFIG = {
   name: "Roadworks TMS",
   version: packageJson.version,
-  copyright: `© ${currentYear}, Studio Admin.`,
+  copyright: `© ${currentYear}, Roadworks TMS.`,
   meta: {
-    title: "Studio Admin - Modern Next.js Dashboard Starter Template",
-    description:
-      "Studio Admin is a modern, open-source dashboard starter template built with Next.js 16, Tailwind CSS v4, and shadcn/ui. Perfect for SaaS apps, admin panels, and internal tools—fully customizable and production-ready.",
+    title: "Roadworks TMS",
+    description: "Intelligent roadworks traffic monitoring and custom vehicle detection dashboard.",
   },
 };

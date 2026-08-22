@@ -11,11 +11,11 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\setup.ps1
 ```
 
-If Node.js is missing, the script automatically installs the current Node.js LTS release through Windows Package Manager (`winget`). Windows may request administrator approval. It then uses `npm ci` for the locked frontend dependencies, creates `backend/.venv`, installs `backend/requirements.txt`, creates local environment files from the committed examples without overwriting existing files, and downloads the standard YOLO model. Edit `.env.local` and `backend/.env` after setup.
+If Node.js is missing, the script automatically installs the current Node.js LTS release through Windows Package Manager (`winget`). Windows may request administrator approval. It then uses `npm ci` for the locked frontend dependencies, creates `backend/.venv`, installs `backend/requirements.txt`, creates local environment files from the committed examples without overwriting existing files, verifies the bundled custom model, and downloads the standard YOLO fallback model. Edit `.env.local` and `backend/.env` after setup.
 
 If `winget` is unavailable, install Node.js LTS manually from [nodejs.org](https://nodejs.org/) and rerun the script.
 
-Datasets, trained weights, videos, logs, environment files, virtual environments, and build output are deliberately excluded from Git. Dataset downloads are optional because they are large and their URLs are private:
+The selected custom runtime weights are included at `backend/models/best.pt`; the application uses them before the standard COCO fallback. The training datasets are not needed to run detection. Other training outputs, videos, logs, environment files, virtual environments, and build output are deliberately excluded from Git. Dataset downloads are optional because they are large and their URLs are private:
 
 ```powershell
 .\setup.ps1 -DownloadDatasets
@@ -65,7 +65,7 @@ python .\backend\scripts\prepare_combined_dataset.py
 python .\backend\train.py
 ```
 
-Dataset download and training are always manual. Downloads use `curl.exe`, retry transient failures, reject Cloudflare HTML responses, validate the ZIP signature, and never print private dataset URLs. Evaluate the resulting weights before copying a selected `best.pt` to `backend/models/best.pt`.
+Dataset download and training are always manual. Downloads use `curl.exe`, retry transient failures, reject Cloudflare HTML responses, validate the ZIP signature, and never print private dataset URLs. A fresh clone can run inference with the bundled `backend/models/best.pt` without downloading the datasets. Evaluate newly trained weights before replacing that selected runtime model.
 
 For LAN development on the configured workstation, open `http://192.168.1.12:3000`. Restart both development servers after changing the workstation IP, allowed origins, or public backend URL.
 

@@ -39,6 +39,7 @@ yarn-error.log*
 !/backend/media/.gitkeep
 /backend/models/*
 !/backend/models/.gitkeep
+!/backend/models/best.pt
 /backend/runs/
 /backend/*.pt
 /backend/*.onnx
