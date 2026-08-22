@@ -4,14 +4,16 @@ Computer Engineering thesis prototype for monitoring a single-lane roadworks tra
 
 ## Quick setup (Windows PowerShell)
 
-Install Node.js 20.9 or newer and Python 3, then run:
+Install Python 3, then run:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\setup.ps1
 ```
 
-The script uses `npm ci` for the locked frontend dependencies, creates `backend/.venv`, installs `backend/requirements.txt`, creates local environment files from the committed examples without overwriting existing files, and downloads the standard YOLO model. Edit `.env.local` and `backend/.env` after setup.
+If Node.js is missing, the script automatically installs the current Node.js LTS release through Windows Package Manager (`winget`). Windows may request administrator approval. It then uses `npm ci` for the locked frontend dependencies, creates `backend/.venv`, installs `backend/requirements.txt`, creates local environment files from the committed examples without overwriting existing files, and downloads the standard YOLO model. Edit `.env.local` and `backend/.env` after setup.
+
+If `winget` is unavailable, install Node.js LTS manually from [nodejs.org](https://nodejs.org/) and rerun the script.
 
 Datasets, trained weights, videos, logs, environment files, virtual environments, and build output are deliberately excluded from Git. Dataset downloads are optional because they are large and their URLs are private:
 
@@ -22,11 +24,11 @@ Datasets, trained weights, videos, logs, environment files, virtual environments
 ## Manual frontend setup
 
 ```powershell
-npm install
+npm ci
 npm run dev
 ```
 
-If PowerShell blocks `npm.ps1`, use `npm.cmd install` and `npm.cmd run dev`. Copy `.env.example` to `.env.local` and configure Firebase plus `NEXT_PUBLIC_BACKEND_URL`. Never commit `.env.local`.
+If PowerShell blocks `npm.ps1`, use `npm.cmd ci` and `npm.cmd run dev`. Copy `.env.example` to `.env.local` and configure Firebase plus `NEXT_PUBLIC_BACKEND_URL`. Never commit `.env.local`.
 
 ## Manual Flask backend setup
 

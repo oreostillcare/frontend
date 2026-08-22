@@ -23,22 +23,82 @@ function Copy-ExampleIfMissing {
   }
 }
 
+function Get-CommandPath {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Name
+  )
+
+  $command = Get-Command $Name -ErrorAction SilentlyContinue
+  if ($command) {
+    return $command.Source
+  }
+  return $null
+}
+
+function Refresh-ProcessPath {
+  $pathParts = @(
+    [Environment]::GetEnvironmentVariable("Path", "Machine")
+    [Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+  $env:Path = $pathParts -join ";"
+}
+
 Push-Location $repoRoot
 try {
   if (-not $SkipFrontend) {
-    $node = Get-Command node.exe -ErrorAction SilentlyContinue
-    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
-    if (-not $node -or -not $npm) {
-      throw "Node.js 20.9 or newer (including npm) is required. Install it from https://nodejs.org/ and rerun this script."
+    $nodePath = Get-CommandPath -Name "node.exe"
+    $npmPath = Get-CommandPath -Name "npm.cmd"
+
+    if (-not $nodePath -or -not $npmPath) {
+      $wingetPath = Get-CommandPath -Name "winget.exe"
+      if (-not $wingetPath) {
+        throw "Node.js is missing and winget is unavailable. Install Node.js LTS from https://nodejs.org/ and rerun this script."
+      }
+
+      Write-Host "Node.js was not found. Installing Node.js LTS with winget..."
+      Write-Host "Windows may ask for administrator approval."
+      & $wingetPath install `
+        --id OpenJS.NodeJS.LTS `
+        --exact `
+        --source winget `
+        --silent `
+        --accept-package-agreements `
+        --accept-source-agreements
+      if ($LASTEXITCODE -ne 0) {
+        throw "Installing Node.js with winget failed with exit code $LASTEXITCODE."
+      }
+
+      Refresh-ProcessPath
+      $nodePath = Get-CommandPath -Name "node.exe"
+      $npmPath = Get-CommandPath -Name "npm.cmd"
+
+      if (-not $nodePath -or -not $npmPath) {
+        $nodeInstallDir = Join-Path $env:ProgramFiles "nodejs"
+        $nodeCandidate = Join-Path $nodeInstallDir "node.exe"
+        $npmCandidate = Join-Path $nodeInstallDir "npm.cmd"
+        if (Test-Path -LiteralPath $nodeCandidate) {
+          $nodePath = $nodeCandidate
+        }
+        if (Test-Path -LiteralPath $npmCandidate) {
+          $npmPath = $npmCandidate
+        }
+      }
+
+      if (-not $nodePath -or -not $npmPath) {
+        throw "Node.js was installed, but this terminal cannot find it yet. Open a new PowerShell window and rerun .\setup.ps1."
+      }
     }
 
-    $nodeVersionText = (& $node.Source --version).Trim().TrimStart("v")
+    $nodeVersionText = (& $nodePath --version).Trim().TrimStart("v")
     if ([Version]$nodeVersionText -lt [Version]"20.9.0") {
       throw "Node.js 20.9 or newer is required; found $nodeVersionText."
     }
 
     Write-Host "Installing frontend dependencies with npm ci..."
-    & $npm.Source ci
+    & $npmPath ci
     if ($LASTEXITCODE -ne 0) {
       throw "npm ci failed with exit code $LASTEXITCODE."
     }
