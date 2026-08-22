@@ -3,7 +3,7 @@ import packageJson from "../../package.json";
 const currentYear = new Date().getFullYear();
 
 export const APP_CONFIG = {
-  name: "Studio Admin",
+  name: "Roadworks TMS",
   version: packageJson.version,
   copyright: `© ${currentYear}, Studio Admin.`,
   meta: {

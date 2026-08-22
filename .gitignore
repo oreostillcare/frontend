@@ -25,9 +25,31 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+*.log
 
 # local env files
 .env*.local
+.env
+
+# local traffic-system artifacts
+/backend/.env
+/backend/datasets/*
+!/backend/datasets/.gitkeep
+/backend/media/*
+!/backend/media/.gitkeep
+/backend/models/*
+!/backend/models/.gitkeep
+/backend/runs/
+/backend/*.pt
+/backend/*.onnx
+/backend/*.engine
+*.zip
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # vercel
 .vercel

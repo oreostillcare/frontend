@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Local Detection Console</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #09090b;
+        color: #fafafa;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; background: #09090b; }
+      header { position: sticky; top: 0; z-index: 2; border-bottom: 1px solid #27272a; background: rgba(9, 9, 11, 0.94); backdrop-filter: blur(12px); }
+      .header-inner, main { width: min(1500px, calc(100% - 32px)); margin: 0 auto; }
+      .header-inner { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+      h1, h2, p { margin: 0; }
+      h1 { font-size: 19px; font-weight: 650; letter-spacing: -0.02em; }
+      .subtitle { margin-top: 4px; color: #a1a1aa; font-size: 13px; }
+      main { padding: 24px 0 40px; }
+      .notice { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding: 12px 14px; border: 1px solid #27272a; border-radius: 10px; background: #18181b; color: #d4d4d8; font-size: 13px; }
+      .dot { width: 8px; height: 8px; flex: none; border-radius: 999px; background: #22c55e; box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.12); }
+      .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+      .summary-item, .camera-card { border: 1px solid #27272a; background: #111113; border-radius: 12px; }
+      .summary-item { padding: 13px 14px; }
+      .label { color: #a1a1aa; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; }
+      .summary-value { margin-top: 6px; font-size: 17px; font-weight: 650; }
+      .camera-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+      .camera-card { overflow: hidden; }
+      .camera-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 15px 16px; }
+      .camera-title { font-size: 15px; font-weight: 650; }
+      .camera-description { margin-top: 4px; color: #a1a1aa; font-size: 12px; }
+      .badge { min-height: 22px; display: inline-flex; align-items: center; border: 1px solid #3f3f46; border-radius: 999px; padding: 2px 8px; color: #d4d4d8; font-size: 10px; font-weight: 700; white-space: nowrap; }
+      .badge.online { border-color: rgba(34, 197, 94, 0.35); background: rgba(34, 197, 94, 0.1); color: #86efac; }
+      .badge.offline { border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.1); color: #fca5a5; }
+      .feed { position: relative; margin: 0 16px; overflow: hidden; aspect-ratio: 16 / 9; border: 1px solid #27272a; border-radius: 9px; background: #050505; }
+      .feed img { display: block; width: 100%; height: 100%; object-fit: contain; }
+      .feed-state { position: absolute; inset: 0; display: none; place-items: center; background: #09090b; color: #a1a1aa; font-size: 13px; }
+      .camera-card[data-online="false"] .feed-state { display: grid; }
+      .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 15px 16px; }
+      .metric-value { margin-top: 4px; font-size: 15px; font-weight: 650; }
+      .classes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 0 16px 16px; }
+      .class-item { display: flex; justify-content: space-between; gap: 8px; padding: 8px 10px; border-radius: 7px; background: #1c1c1f; color: #d4d4d8; font-size: 12px; }
+      .class-count { color: #fafafa; font-weight: 700; }
+      @media (max-width: 900px) {
+        .summary, .camera-grid { grid-template-columns: 1fr 1fr; }
+        .camera-grid { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 560px) {
+        .header-inner, main { width: min(100% - 20px, 1500px); }
+        .summary { grid-template-columns: 1fr 1fr; }
+        .metrics, .classes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="header-inner">
+        <div>
+          <h1>Local Detection Console</h1>
+          <p class="subtitle">Offline-capable YOLO + ByteTrack monitoring</p>
+        </div>
+        <span class="badge online">LOCAL SYSTEM</span>
+      </div>
+    </header>
+    <main>
+      <div class="notice">
+        <span class="dot"></span>
+        Detection runs in the Flask camera worker even when this page and the Next.js dashboard are closed.
+      </div>
+      <section class="summary" aria-label="Local runtime summary">
+        <div class="summary-item"><div class="label">Backend</div><div class="summary-value" id="backend-status">Connecting</div></div>
+        <div class="summary-item"><div class="label">Model</div><div class="summary-value" id="model-status">--</div></div>
+        <div class="summary-item"><div class="label">Target FPS</div><div class="summary-value">{{ detection_fps | round(1) }}</div></div>
+        <div class="summary-item"><div class="label">Line counting</div><div class="summary-value">{{ "Enabled" if line_counting else "Disabled" }}</div></div>
+      </section>
+      <section class="camera-grid" aria-label="Local camera feeds">
+        {% set camera_ids = [1, 2] %}
+        {% for camera_id in camera_ids %}
+        <article class="camera-card" id="camera-{{ camera_id }}" data-online="false">
+          <div class="camera-header">
+            <div>
+              <h2 class="camera-title">Camera {{ "A" if camera_id == 1 else "B" }} / Lane {{ "A" if camera_id == 1 else "B" }}</h2>
+              <p class="camera-description">
+                {% if camera_id == 2 and single_camera_mode %}Camera A mirror; shared local detection worker{% else %}Processed locally; no cloud viewer required{% endif %}
+              </p>
+            </div>
+            <span class="badge" id="camera-{{ camera_id }}-status">{% if camera_id == 2 and single_camera_mode %}TEST MIRROR{% else %}CONNECTING{% endif %}</span>
+          </div>
+          <div class="feed">
+            <img src="/video/camera/{{ camera_id }}" alt="Processed Camera {{ camera_id }} feed" data-camera-id="{{ camera_id }}" />
+            <div class="feed-state">Waiting for local camera stream...</div>
+          </div>
+          <div class="metrics">
+            <div><div class="label">Detection FPS</div><div class="metric-value" id="camera-{{ camera_id }}-fps">--</div></div>
+            <div><div class="label">Visible</div><div class="metric-value" id="camera-{{ camera_id }}-visible">--</div></div>
+            <div><div class="label">Frame age</div><div class="metric-value" id="camera-{{ camera_id }}-frame-age">--</div></div>
+            <div><div class="label">Processing</div><div class="metric-value" id="camera-{{ camera_id }}-processing">--</div></div>
+          </div>
+          <div class="classes" id="camera-{{ camera_id }}-classes"></div>
+        </article>
+        {% endfor %}
+      </section>
+    </main>
+    <script>
+      const vehicleClasses = ["car", "motorcycle", "truck", "bus", "ebike", "etrike", "jeepney"];
+      const value = (item) => item === null || item === undefined ? "--" : item;
+
+      function renderCamera(camera) {
+        const card = document.getElementById(`camera-${camera.id}`);
+        if (!card) return;
+        card.dataset.online = String(Boolean(camera.online));
+        const status = document.getElementById(`camera-${camera.id}-status`);
+        status.textContent = camera.testMirror ? "TEST MIRROR" : camera.online ? "LIVE" : "OFFLINE";
+        status.className = `badge ${camera.online ? "online" : "offline"}`;
+        document.getElementById(`camera-${camera.id}-fps`).textContent = value(camera.fps);
+        document.getElementById(`camera-${camera.id}-visible`).textContent = value(camera.visibleVehicles);
+        document.getElementById(`camera-${camera.id}-frame-age`).textContent = camera.frameAgeMs == null ? "--" : `${camera.frameAgeMs} ms`;
+        document.getElementById(`camera-${camera.id}-processing`).textContent = camera.processingMs == null ? "--" : `${camera.processingMs} ms`;
+        document.getElementById(`camera-${camera.id}-classes`).innerHTML = vehicleClasses
+          .map((name) => `<div class="class-item"><span>${name}</span><span class="class-count">${value(camera.classes?.[name])}</span></div>`)
+          .join("");
+      }
+
+      async function refresh() {
+        try {
+          const [cameraResponse, modelResponse] = await Promise.all([
+            fetch("/api/cameras", { cache: "no-store" }),
+            fetch("/api/model", { cache: "no-store" }),
+          ]);
+          if (!cameraResponse.ok || !modelResponse.ok) throw new Error("Local API unavailable");
+          const cameras = await cameraResponse.json();
+          const model = await modelResponse.json();
+          document.getElementById("backend-status").textContent = "Running";
+          document.getElementById("model-status").textContent = model.online ? `${model.model} / ${model.weights}` : "Unavailable";
+          cameras.forEach(renderCamera);
+        } catch {
+          document.getElementById("backend-status").textContent = "Reconnecting";
+        }
+      }
+
+      document.querySelectorAll(".feed img").forEach((image) => {
+        image.addEventListener("error", () => {
+          const cameraId = image.dataset.cameraId;
+          document.getElementById(`camera-${cameraId}`).dataset.online = "false";
+          window.setTimeout(() => { image.src = `/video/camera/${cameraId}?retry=${Date.now()}`; }, 2000);
+        });
+      });
+
+      refresh();
+      window.setInterval(refresh, 1500);
+    </script>
+  </body>
+</html>

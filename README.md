@@ -1,146 +1,80 @@
-# Next.js Admin Template with TypeScript & Shadcn UI
+# Intelligent Roadworks Traffic Management Dashboard
 
-**Studio Admin** - Includes multiple dashboards, authentication layouts, customizable theme presets, and more.
+Computer Engineering thesis prototype for monitoring a single-lane roadworks traffic system. The Next.js dashboard is a non-critical monitoring client; camera inference, tracking, counting, and eventual traffic-signal operation remain local.
 
-<img src="https://github.com/arhamkhnz/next-shadcn-admin-dashboard/blob/main/media/dashboard.png?version=5" alt="Dashboard Screenshot">
+## Quick setup (Windows PowerShell)
 
-Most admin templates I found, free or paid, felt cluttered, outdated, or too rigid. I built this as a cleaner alternative with features often missing in others, such as theme toggling and layout controls, while keeping the design modern, minimal, and flexible.
+Install Node.js 20.9 or newer and Python 3, then run:
 
-> **View demo:** [studio admin](https://next-shadcn-admin-dashboard.vercel.app)
-
-> [!NOTE]
-> Looking for the Base UI version? Check out [next-shadcn-admin-dashboard-baseui](https://github.com/arhamkhnz/next-shadcn-admin-dashboard-baseui).
->
-> Looking for the React Aria version? Check out [arhamkhnz/next-shadcn-admin-dashboard-aria](https://github.com/arhamkhnz/next-shadcn-admin-dashboard-aria).
->
-> Looking for the TanStack Start version? Check out [tanstack-shadcn-admin-dashboard](https://github.com/arhamkhnz/tanstack-shadcn-admin-dashboard).
-
-> [!TIP]
-> I’m also working on Nuxt.js and Svelte versions of this dashboard. They’ll be live soon.
-
-## Features
-
-- Built with Next.js 16, TypeScript, Tailwind CSS v4, and Shadcn UI  
-- Responsive and mobile-friendly  
-- Customizable theme presets (light/dark modes with color schemes like Tangerine, Brutalist, and more)  
-- Flexible layouts (collapsible sidebar, variable content widths)  
-- Authentication flows and screens  
-- Prebuilt dashboards (Default, CRM, Finance, Analytics, Productivity) plus legacy variants  
-- Role-Based Access Control (RBAC) with config-driven UI and multi-tenant support *(planned)*  
-
-> [!NOTE]
-> The default dashboard uses the **shadcn neutral** theme.  
-> It also includes additional color presets inspired by [Tweakcn](https://tweakcn.com):  
->
-> - Tangerine  
-> - Neo Brutalism  
-> - Soft Pop  
->
-> You can create more presets by following the same structure as the existing ones.
-
-> Looking for the **Next.js 15** version?  
-> Check out the [`archive/next15`](https://github.com/arhamkhnz/next-shadcn-admin-dashboard/tree/archive/next15) branch.  
-> This branch contains the setup prior to upgrading to Next 16 and the React Compiler.
-
-> Looking for the **Next.js 14 + Tailwind CSS v3** version?  
-> Check out the [`archive/next14-tailwindv3`](https://github.com/arhamkhnz/next-shadcn-admin-dashboard/tree/archive/next14-tailwindv3) branch.  
-> It has a different color theme and is not actively maintained, but I try to keep it updated with major changes.  
-
-## Tech Stack
-
-- **Framework**: Next.js 16 (App Router), TypeScript, Tailwind CSS v4  
-- **UI Components**: Shadcn UI  
-- **Validation**: Zod  
-- **Forms & State Management**: React Hook Form, Zustand  
-- **Tables & Data Handling**: TanStack Table  
-- **Tooling & DX**: Biome, Husky  
-
-## Screens
-
-### Available
-- Default Dashboard  
-- CRM Dashboard  
-- Finance Dashboard  
-- Analytics Dashboard  
-- Productivity Dashboard  
-- E-commerce Dashboard  
-- Academy Dashboard  
-- Logistics Dashboard  
-- Infrastructure Dashboard  
-- File Manager  
-- Patient Monitoring  
-- Chat Page  
-- Email Page  
-- Profile  
-- Users Management  
-- Roles Management  
-- Kanban Board  
-- Tasks Page  
-- Invoice Page  
-- Calendar Page  
-- Authentication (4 screens)  
-- Legacy: Default v1, CRM v1, Finance v1, Analytics v1
-
-### Planned
-I’ve added all the planned screens. Feel free to open an issue for requesting something specific.
-
-## Colocation File System Architecture
-
-This project follows a **colocation-based architecture** each feature keeps its own pages, components, and logic inside its route folder.  
-Shared UI, hooks, and configuration live at the top level, making the codebase modular, scalable, and easier to maintain as the app grows.
-
-For a full breakdown of the structure with examples, see the [Next Colocation Template](https://github.com/arhamkhnz/next-colocation-template).
-
-## Getting Started
-
-You can run this project locally, or deploy it instantly with Vercel.
-
-### Deploy with Vercel
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Farhamkhnz%2Fnext-shadcn-admin-dashboard)
-
-_Deploy your own copy with one click._
-
-### Run locally
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/arhamkhnz/next-shadcn-admin-dashboard.git
-   ```
-   
-2. **Navigate into the project**
-   ```bash
-    cd next-shadcn-admin-dashboard
-   ```
-   
-3. **Install dependencies**
-   ```bash
-    npm install
-   ```
-
-4. **Start the development server**
-   ```bash
-   npm run dev
-   ```
-
-Your app will be running at [http://localhost:3000](http://localhost:3000)
-
-### Formatting and Linting
-
-Format, lint, and organize imports
-```bash
-npx @biomejs/biome check --write
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\setup.ps1
 ```
-> For more information on available rules, fixes, and CLI options, refer to the [Biome documentation](https://biomejs.dev/).
 
----
+The script uses `npm ci` for the locked frontend dependencies, creates `backend/.venv`, installs `backend/requirements.txt`, creates local environment files from the committed examples without overwriting existing files, and downloads the standard YOLO model. Edit `.env.local` and `backend/.env` after setup.
 
-> [!IMPORTANT]  
-> This project is updated frequently. If you’re working from a fork or an older clone, pull the latest changes before syncing. Some updates may include breaking changes.
+Datasets, trained weights, videos, logs, environment files, virtual environments, and build output are deliberately excluded from Git. Dataset downloads are optional because they are large and their URLs are private:
 
----
+```powershell
+.\setup.ps1 -DownloadDatasets
+```
 
-Contributions are welcome. Feel free to open issues, feature requests, or start a discussion.
+## Manual frontend setup
 
+```powershell
+npm install
+npm run dev
+```
 
-**Happy Vibe Coding!**
+If PowerShell blocks `npm.ps1`, use `npm.cmd install` and `npm.cmd run dev`. Copy `.env.example` to `.env.local` and configure Firebase plus `NEXT_PUBLIC_BACKEND_URL`. Never commit `.env.local`.
+
+## Manual Flask backend setup
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python app.py
+```
+
+If activation is blocked, run `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` followed by `.\.venv\Scripts\python.exe app.py`. Copy `.env.example` to `.env`, then add private RTSP and Roboflow values. The committed example contains placeholders only.
+
+The backend starts detection immediately; opening a browser does not create the camera or inference worker. For an offline, Flask-only view that does not require Next.js, Firebase, or internet access, open:
+
+```text
+http://127.0.0.1:5000/local
+```
+
+Camera capture continuously drains RTSP into a one-frame overwrite buffer. YOLO always takes the newest available frame, so inference that runs slower than the camera drops stale frames instead of accumulating latency. `frameAgeMs` and `processingMs` are exposed in local telemetry for latency diagnosis.
+
+While `TEST_SINGLE_CAMERA_MODE=true`, the Flask console and Next.js monitoring page render Camera A twice for a two-view load test. Camera B is explicitly labeled `TEST MIRROR`; both MJPEG endpoints share Camera A's single capture, YOLO, ByteTrack, and latest JPEG buffer. This adds only a second viewer/network decode path, not a second inference pipeline. When test mode is disabled, Camera 2 receives its own physical stream and worker.
+
+## Datasets and training
+
+From the repository root:
+
+```powershell
+.\backend\scripts\download_datasets.ps1
+.\backend\scripts\download_datasets.ps1 -Dataset etrike_ebike
+.\backend\scripts\download_datasets.ps1 -Dataset road_vehicles
+python .\backend\scripts\inspect_datasets.py
+python .\backend\scripts\prepare_combined_dataset.py
+python .\backend\train.py
+```
+
+Dataset download and training are always manual. Downloads use `curl.exe`, retry transient failures, reject Cloudflare HTML responses, validate the ZIP signature, and never print private dataset URLs. Evaluate the resulting weights before copying a selected `best.pt` to `backend/models/best.pt`.
+
+For LAN development on the configured workstation, open `http://192.168.1.12:3000`. Restart both development servers after changing the workstation IP, allowed origins, or public backend URL.
+
+## Camera architecture
+
+With `TEST_SINGLE_CAMERA_MODE=true`, Flask creates one `CameraWorker`, one `VideoCapture`, one YOLO model/tracking pipeline, and one latest JPEG buffer. Both MJPEG endpoints consume that buffer; Camera B is labeled as a test mirror. When disabled, Camera 2 receives its own worker and independent ByteTrack/counting state.
+
+Configure the counting line with `LINE_X1`, `LINE_Y1`, `LINE_X2`, and `LINE_Y2`. The defaults are placeholders and must be calibrated against the installed camera view.
+
+Line counting is currently disabled with `ENABLE_LINE_COUNTING=false` so testing focuses on detection and tracking. While disabled, the video has no counting line or passed counter and the dashboard reports passed vehicles as unavailable.
+
+The local test configuration uses the camera's lower-bandwidth `stream2` profile at a target of 10 detection FPS. Stock COCO inference is restricted to `car`, `motorcycle`, `truck`, and `bus`; the local confidence threshold is 0.25 to improve recall for smaller motorcycles.
+
+Firebase Authentication can operate without Realtime Database. Until `NEXT_PUBLIC_FIREBASE_DATABASE_URL` is provided, historical analytics and logs intentionally show empty states.
