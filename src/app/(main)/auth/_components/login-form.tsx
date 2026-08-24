@@ -7,9 +7,11 @@ import { FirebaseError } from "firebase/app";
 import {
   browserLocalPersistence,
   browserSessionPersistence,
+  createUserWithEmailAndPassword,
   setPersistence,
   signInWithEmailAndPassword,
 } from "firebase/auth";
+import { collection, getDocs, limit, query, where } from "firebase/firestore";
 import { Controller, useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -18,40 +20,117 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldContent, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { auth } from "@/lib/firebase/client";
+import { auth, db } from "@/lib/firebase/client";
 
 const formSchema = z.object({
-  email: z.email({ message: "Please enter a valid email address." }),
-  password: z.string().min(6, { message: "Password must be at least 6 characters." }),
+  identifier: z.string().min(1, { message: "Please enter your username or email address." }),
+  password: z.string().min(1, { message: "Please enter your password." }),
   remember: z.boolean().optional(),
 });
+
+interface StaffAccount {
+  email: string;
+  password?: string;
+  username: string;
+  role?: string;
+}
+
+async function findStaffAccount(identifier: string): Promise<StaffAccount | null> {
+  if (!db) return null;
+  const trimmed = identifier.trim();
+  const lower = trimmed.toLowerCase();
+
+  try {
+    const staffRef = collection(db, "staff");
+
+    // 1. Try querying by username
+    let snap = await getDocs(query(staffRef, where("username", "==", trimmed), limit(1)));
+    if (snap.empty && lower !== trimmed) {
+      snap = await getDocs(query(staffRef, where("username", "==", lower), limit(1)));
+    }
+    if (!snap.empty) {
+      return snap.docs[0].data() as StaffAccount;
+    }
+
+    // 2. Try querying by email
+    let snapEmail = await getDocs(query(staffRef, where("email", "==", trimmed), limit(1)));
+    if (snapEmail.empty && lower !== trimmed) {
+      snapEmail = await getDocs(query(staffRef, where("email", "==", lower), limit(1)));
+    }
+    if (!snapEmail.empty) {
+      return snapEmail.docs[0].data() as StaffAccount;
+    }
+  } catch (e) {
+    console.warn("Error finding staff account in Firestore:", e);
+  }
+
+  return null;
+}
 
 export function LoginForm() {
   const router = useRouter();
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      email: "",
+      identifier: "",
       password: "",
       remember: false,
     },
   });
+
   async function onSubmit(data: z.infer<typeof formSchema>) {
     if (!auth) {
       form.setError("root", { message: "Firebase Authentication is not configured." });
       return;
     }
+
     try {
       await setPersistence(auth, data.remember ? browserLocalPersistence : browserSessionPersistence);
-      await signInWithEmailAndPassword(auth, data.email, data.password);
-      const nextPath = new URLSearchParams(window.location.search).get("next");
-      router.replace(nextPath || "/dashboard");
+
+      const input = data.identifier.trim();
+      const staffAccount = await findStaffAccount(input);
+
+      const emailToAuth = staffAccount?.email || (input.includes("@") ? input : null);
+
+      if (!emailToAuth) {
+        form.setError("root", {
+          message: `No account found for username "${input}". Please check your username or enter your email address.`,
+        });
+        return;
+      }
+
+      // Try signing in with Firebase Auth
+      try {
+        await signInWithEmailAndPassword(auth, emailToAuth, data.password);
+        const nextPath = new URLSearchParams(window.location.search).get("next");
+        router.replace(nextPath || "/dashboard");
+        return;
+      } catch (signInError) {
+        // If staff record exists in Firestore with matching password, auto-create in Firebase Auth
+        if (staffAccount && staffAccount.password === data.password) {
+          try {
+            await createUserWithEmailAndPassword(auth, staffAccount.email, data.password);
+            const nextPath = new URLSearchParams(window.location.search).get("next");
+            router.replace(nextPath || "/dashboard");
+            return;
+          } catch (createError) {
+            console.warn("Auto Firebase Auth sync error:", createError);
+          }
+        }
+
+        throw signInError;
+      }
     } catch (error) {
+      console.error("Login error:", error);
       form.setError("root", {
         message:
-          error instanceof FirebaseError && error.code === "auth/invalid-credential"
-            ? "Invalid email or password."
-            : "Unable to sign in. Please try again.",
+          error instanceof FirebaseError &&
+          (error.code === "auth/invalid-credential" ||
+            error.code === "auth/user-not-found" ||
+            error.code === "auth/wrong-password" ||
+            error.code === "auth/invalid-email")
+            ? "Invalid username/email or password."
+            : "Unable to sign in. Please verify your credentials and try again.",
       });
     }
   }
@@ -61,16 +140,16 @@ export function LoginForm() {
       <FieldGroup className="gap-4">
         <Controller
           control={form.control}
-          name="email"
+          name="identifier"
           render={({ field, fieldState }) => (
             <Field className="gap-1.5" data-invalid={fieldState.invalid}>
-              <FieldLabel htmlFor="login-email">Email Address</FieldLabel>
+              <FieldLabel htmlFor="login-identifier">Username or Email</FieldLabel>
               <Input
                 {...field}
-                id="login-email"
-                type="email"
-                placeholder="you@example.com"
-                autoComplete="email"
+                id="login-identifier"
+                type="text"
+                placeholder="Enter username or email address"
+                autoComplete="username"
                 aria-invalid={fieldState.invalid}
               />
               {fieldState.invalid && <FieldError errors={[fieldState.error]} />}

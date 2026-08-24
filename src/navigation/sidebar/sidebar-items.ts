@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   type LucideIcon,
   ScrollText,
+  Users,
   Video,
 } from "lucide-react";
 
@@ -54,6 +55,7 @@ export const sidebarItems: NavGroup[] = [
       { id: "monitoring", title: "Live Monitoring", url: "/dashboard/monitoring", icon: Video },
       { id: "analytics", title: "Analytics", url: "/dashboard/analytics", icon: ChartNoAxesCombined },
       { id: "logs", title: "System Logs", url: "/dashboard/logs", icon: ScrollText },
+      { id: "staff", title: "Staff Information", url: "/dashboard/staff", icon: Users },
       { id: "account", title: "Account", url: "/dashboard/account", icon: CircleUserRound },
     ],
   },
