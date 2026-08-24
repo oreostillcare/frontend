@@ -1,0 +1,7 @@
+flask
+flask-cors
+opencv-python
+ultralytics
+lap>=0.5.12
+python-dotenv
+PyYAML
