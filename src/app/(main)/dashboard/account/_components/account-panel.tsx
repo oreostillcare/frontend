@@ -1,7 +1,10 @@
 "use client";
 
-import { CircleHelp, LogOut } from "lucide-react";
+import * as React from "react";
 
+import { CircleHelp, KeyRound, LogOut } from "lucide-react";
+
+import { PasswordResetDialog } from "@/components/password-reset-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,6 +27,7 @@ function getRoleDescription(role: StaffRole | null) {
 export function AccountPanel() {
   const { user, name, email, logout, isLoggingOut, staffProfile, staffRole, staffLoading, administratorEmail } =
     useFirebaseAccount();
+  const [resetDialogOpen, setResetDialogOpen] = React.useState(false);
 
   const dateJoined =
     staffProfile?.dateJoined ||
@@ -70,7 +74,11 @@ export function AccountPanel() {
             </div>
           </dl>
         </CardContent>
-        <CardFooter>
+        <CardFooter className="flex-wrap gap-2">
+          <Button variant="outline" onClick={() => setResetDialogOpen(true)} disabled={!user?.email || !staffProfile}>
+            <KeyRound data-icon="inline-start" />
+            Reset password
+          </Button>
           <Button variant="outline" onClick={() => void logout()} disabled={!user || isLoggingOut}>
             <LogOut data-icon="inline-start" />
             {isLoggingOut ? "Logging out..." : "Log out"}
@@ -83,7 +91,7 @@ export function AccountPanel() {
           <CircleHelp />
           <AlertTitle>Need help with your account?</AlertTitle>
           <AlertDescription>
-            For password resets or if a problem persists, contact the administrator
+            If a problem persists, contact the administrator
             {administratorEmail ? (
               <>
                 {" "}
@@ -95,6 +103,24 @@ export function AccountPanel() {
           </AlertDescription>
         </Alert>
       )}
+
+      <PasswordResetDialog
+        open={resetDialogOpen}
+        onOpenChange={setResetDialogOpen}
+        staff={
+          staffProfile
+            ? {
+                id: staffProfile.id,
+                username: staffProfile.username,
+                email: staffProfile.email,
+                accountStatus: staffProfile.accountStatus,
+                passwordResetStatus: staffProfile.passwordResetStatus,
+                passwordResetRequestedAt: staffProfile.passwordResetRequestedAt,
+                passwordResetCompletedAt: staffProfile.passwordResetCompletedAt,
+              }
+            : null
+        }
+      />
     </div>
   );
 }

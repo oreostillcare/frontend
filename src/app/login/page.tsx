@@ -5,7 +5,7 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-muted/30 p-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>Roadworks Traffic Monitoring</CardTitle>
+          <CardTitle>SmartRoad</CardTitle>
           <CardDescription>Sign in with your authorized Firebase account.</CardDescription>
         </CardHeader>
         <CardContent>

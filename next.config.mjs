@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactCompiler: true,
-  allowedDevOrigins: ['192.168.1.6'],
+  allowedDevOrigins: ['169.254.199.14'],
   compiler: {
     removeConsole: process.env.NODE_ENV === "production",
   },

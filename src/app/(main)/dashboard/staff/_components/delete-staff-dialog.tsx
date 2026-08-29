@@ -11,27 +11,28 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+
 import type { StaffMember } from "./staff-types";
 
-interface DeleteStaffDialogProps {
+interface ArchiveStaffDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   staff: StaffMember | null;
-  onConfirmDelete: () => Promise<void> | void;
+  onConfirmArchive: () => Promise<void> | void;
 }
 
-export function DeleteStaffDialog({ open, onOpenChange, staff, onConfirmDelete }: DeleteStaffDialogProps) {
-  const [isDeleting, setIsDeleting] = React.useState(false);
+export function ArchiveStaffDialog({ open, onOpenChange, staff, onConfirmArchive }: ArchiveStaffDialogProps) {
+  const [isArchiving, setIsArchiving] = React.useState(false);
 
-  const handleDelete = async () => {
+  const handleArchive = async () => {
     try {
-      setIsDeleting(true);
-      await onConfirmDelete();
+      setIsArchiving(true);
+      await onConfirmArchive();
       onOpenChange(false);
-    } catch (err) {
-      console.error(err);
+    } catch (error) {
+      console.error(error);
     } finally {
-      setIsDeleting(false);
+      setIsArchiving(false);
     }
   };
 
@@ -39,23 +40,22 @@ export function DeleteStaffDialog({ open, onOpenChange, staff, onConfirmDelete }
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[400px]">
         <DialogHeader>
-          <DialogTitle>Delete Staff Member</DialogTitle>
+          <DialogTitle>Archive staff member</DialogTitle>
           <DialogDescription>
-            Are you sure you want to remove{" "}
-            <span className="font-semibold text-foreground">{staff?.username || "this staff member"}</span>? This will
-            remove their system access and cannot be undone.
+            Archive <span className="font-semibold text-foreground">{staff?.username || "this staff member"}</span>?
+            Their Firebase account and staff history remain available, but dashboard access is disabled until an
+            administrator reactivates the account.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="gap-2 sm:gap-0">
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isDeleting}>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isArchiving}>
             Cancel
           </Button>
-          <Button type="button" variant="destructive" onClick={handleDelete} disabled={isDeleting}>
-            {isDeleting ? "Deleting..." : "Delete Account"}
+          <Button type="button" variant="destructive" onClick={handleArchive} disabled={isArchiving}>
+            {isArchiving ? "Archiving..." : "Archive account"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
-

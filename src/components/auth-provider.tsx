@@ -6,7 +6,12 @@ import type { User } from "firebase/auth";
 import { onAuthStateChanged } from "firebase/auth";
 
 import { auth, initializeFirebaseAnalytics, isFirebaseConfigured } from "@/lib/firebase/client";
-import { loadStaffAccess, type StaffProfile, type StaffRole } from "@/lib/firebase/staff-access";
+import {
+  loadAdministratorEmail,
+  type StaffProfile,
+  type StaffRole,
+  subscribeToStaffProfile,
+} from "@/lib/firebase/staff-access";
 
 interface AuthState {
   user: User | null;
@@ -70,28 +75,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let isCurrent = true;
     setStaffAccess({ userId: user.uid, profile: null, administratorEmail: null, loading: true });
 
-    void loadStaffAccess(user)
-      .then((access) => {
-        if (!isCurrent) {
-          return;
-        }
-
-        setStaffAccess({
+    const unsubscribe = subscribeToStaffProfile(
+      user,
+      (profile) => {
+        if (!isCurrent) return;
+        setStaffAccess((current) => ({
           userId: user.uid,
-          profile: access.profile,
-          administratorEmail: access.administratorEmail,
+          profile,
+          administratorEmail: current.userId === user.uid ? current.administratorEmail : null,
           loading: false,
-        });
-      })
-      .catch((error: unknown) => {
-        console.warn("Could not load the authenticated staff profile:", error);
+        }));
+
+        if (profile) {
+          void loadAdministratorEmail(user).then((administratorEmail) => {
+            if (!isCurrent) return;
+            setStaffAccess((current) => (current.userId === user.uid ? { ...current, administratorEmail } : current));
+          });
+        }
+      },
+      (error) => {
+        console.warn("Could not subscribe to the authenticated staff profile:", error);
         if (isCurrent) {
           setStaffAccess({ userId: user.uid, profile: null, administratorEmail: null, loading: false });
         }
-      });
+      },
+    );
 
     return () => {
       isCurrent = false;
+      unsubscribe();
     };
   }, [loading, user]);
 

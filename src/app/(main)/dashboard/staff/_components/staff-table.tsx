@@ -1,184 +1,269 @@
 "use client";
 
 import * as React from "react";
-import { collection, getDocs, limit, query, where } from "firebase/firestore";
-import { ArrowUpDown, Eye, EyeOff, Plus, SquarePen, Trash2 } from "lucide-react";
+
+import { Archive, ArrowUpDown, KeyRound, Plus, RotateCcw, SquarePen } from "lucide-react";
 import { toast } from "sonner";
 
+import { PasswordResetDialog } from "@/components/password-reset-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useFirebaseAccount } from "@/hooks/use-firebase-account";
-import { db } from "@/lib/firebase/client";
-import {
-  addStaffMember,
-  deleteStaffMember,
-  fetchStaffMembers,
-  INITIAL_STAFF_MEMBERS,
-  updateStaffMember,
-} from "@/lib/firebase/staff-service";
+import { createPendingVerifiedAccount } from "@/lib/firebase/auth-email";
+import { staffApi } from "@/lib/firebase/staff-api";
+import { subscribeToStaffMembers } from "@/lib/firebase/staff-service";
 
-import { DeleteStaffDialog } from "./delete-staff-dialog";
+import { ArchiveStaffDialog } from "./delete-staff-dialog";
 import { StaffDialog } from "./staff-dialog";
-import type { StaffFormData, StaffMember, StaffRole } from "./staff-types";
+import type { StaffFormData, StaffMember, StaffSaveResult } from "./staff-types";
 
-type SortField = "role" | "username" | "email" | "password" | "dateJoined";
+type SortField = "role" | "username" | "email" | "accountStatus" | "dateJoined";
+
+interface PendingEmailVerification {
+  message: string;
+  email: string;
+  verificationToken: string;
+  temporaryPassword: string;
+  expiresAt: string;
+}
+
+interface CancelEmailVerificationResponse {
+  message: string;
+  status: "cancelled" | "completed" | "idle";
+}
+
+function verificationUrl(pathname: string, token: string) {
+  const url = new URL(pathname, window.location.origin);
+  url.searchParams.set("token", token);
+  return url.toString();
+}
+
+function getAccountStatus(staff: StaffMember) {
+  if (staff.accountStatus === "archived") return "Verified Archived";
+  if (!staff.emailVerified) return "Pending Verification";
+  return "Verified Active";
+}
 
 export function StaffTable() {
-  const { user } = useFirebaseAccount();
-  const [currentUserRole, setCurrentUserRole] = React.useState<StaffRole>("Administrator");
-  const [staffList, setStaffList] = React.useState<StaffMember[]>(INITIAL_STAFF_MEMBERS);
+  const { user, staffRole } = useFirebaseAccount();
+  const [staffList, setStaffList] = React.useState<StaffMember[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [searchQuery, setSearchQuery] = React.useState("");
   const [sortField, setSortField] = React.useState<SortField>("dateJoined");
   const [sortDirection, setSortDirection] = React.useState<"asc" | "desc">("desc");
-  const [visiblePasswords, setVisiblePasswords] = React.useState<Record<string, boolean>>({});
-
-  // Pagination state
   const [currentPage, setCurrentPage] = React.useState(1);
-  const pageSize = 5;
-
-  // Dialog states
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [editingStaff, setEditingStaff] = React.useState<StaffMember | null>(null);
-  const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
-  const [staffToDelete, setStaffToDelete] = React.useState<StaffMember | null>(null);
+  const [archiveDialogOpen, setArchiveDialogOpen] = React.useState(false);
+  const [staffToArchive, setStaffToArchive] = React.useState<StaffMember | null>(null);
+  const [resetDialogOpen, setResetDialogOpen] = React.useState(false);
+  const [staffToReset, setStaffToReset] = React.useState<StaffMember | null>(null);
+  const pageSize = 5;
+  const isAdmin = staffRole === "Administrator";
 
-  // Check current user's role from Firestore
+  React.useEffect(
+    () =>
+      subscribeToStaffMembers(
+        (staff) => {
+          setStaffList(staff);
+          setIsLoading(false);
+        },
+        (error) => {
+          console.error("Staff subscription error:", error);
+          toast.error("Failed to subscribe to staff records in Firestore.");
+          setIsLoading(false);
+        },
+      ),
+    [],
+  );
+
+  const pendingCredentialKey = staffList
+    .filter(
+      (staff) =>
+        !staff.isInvitation && (staff.emailChangeStatus === "pending" || staff.passwordResetStatus === "pending"),
+    )
+    .map((staff) => `${staff.id}:${staff.emailChangeStatus}:${staff.passwordResetStatus}`)
+    .join("|");
+
   React.useEffect(() => {
-    async function checkUserRole() {
-      if (!user?.email || !db) return;
-      try {
-        const staffRef = collection(db, "staff");
-        const q = query(staffRef, where("email", "==", user.email), limit(1));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          const data = snap.docs[0].data();
-          if (data.role) {
-            setCurrentUserRole(data.role as StaffRole);
+    if (!isAdmin || !pendingCredentialKey) return;
+    const pendingStaff = staffList.filter(
+      (staff) =>
+        !staff.isInvitation && (staff.emailChangeStatus === "pending" || staff.passwordResetStatus === "pending"),
+    );
+    const reconcileCredentialUpdates = async () => {
+      await Promise.all(
+        pendingStaff.flatMap((staff) => {
+          const checks: Promise<void>[] = [];
+          if (staff.emailChangeStatus === "pending") {
+            checks.push(
+              staffApi(`/api/staff/${encodeURIComponent(staff.id)}/email-change`)
+                .then(() => undefined)
+                .catch((error: unknown) => console.error("Email change status error:", error)),
+            );
           }
-        }
-      } catch (err) {
-        console.warn("Could not determine current user role from Firestore:", err);
-      }
-    }
-    checkUserRole();
-  }, [user?.email]);
+          if (staff.passwordResetStatus === "pending") {
+            checks.push(
+              staffApi(`/api/staff/password-reset?staffId=${encodeURIComponent(staff.id)}`)
+                .then(() => undefined)
+                .catch((error: unknown) => console.error("Password reset status error:", error)),
+            );
+          }
+          return checks;
+        }),
+      );
+    };
 
-  const isAdmin = currentUserRole === "Administrator";
-
-  const loadStaff = React.useCallback(async () => {
-    try {
-      setIsLoading(true);
-      const data = await fetchStaffMembers();
-      setStaffList(data);
-    } catch (error) {
-      console.error("Error fetching staff:", error);
-      toast.error("Failed to load staff list from Firestore.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  React.useEffect(() => {
-    loadStaff();
-  }, [loadStaff]);
+    void reconcileCredentialUpdates();
+    const interval = window.setInterval(() => void reconcileCredentialUpdates(), 3000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [isAdmin, pendingCredentialKey, staffList]);
 
   const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
-    } else {
+    if (sortField === field) setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+    else {
       setSortField(field);
       setSortDirection("asc");
     }
     setCurrentPage(1);
   };
 
-  const togglePasswordVisibility = (id: string) => {
-    setVisiblePasswords((prev) => ({
-      ...prev,
-      [id]: !prev[id],
-    }));
-  };
-
-  const maskPassword = (password?: string) => {
-    if (!password) return "••••••••";
-    if (password.length <= 2) return "••";
-    const firstChar = password.charAt(0);
-    return `${firstChar}**${"•".repeat(Math.max(3, password.length - 3))}`;
-  };
-
-  // Filtered and sorted data
   const filteredStaff = React.useMemo(() => {
-    const query = searchQuery.toLowerCase().trim();
-    const list = staffList.filter(
-      (item) =>
-        item.role.toLowerCase().includes(query) ||
-        item.username.toLowerCase().includes(query) ||
-        item.email.toLowerCase().includes(query),
-    );
+    const search = searchQuery.toLowerCase().trim();
+    return staffList
+      .filter((staff) =>
+        [staff.role, staff.username, staff.email, staff.pendingEmail || "", getAccountStatus(staff)]
+          .join(" ")
+          .toLowerCase()
+          .includes(search),
+      )
+      .sort((left, right) => {
+        const comparison = String(left[sortField] || "").localeCompare(String(right[sortField] || ""));
+        return sortDirection === "asc" ? comparison : -comparison;
+      });
+  }, [searchQuery, sortDirection, sortField, staffList]);
 
-    list.sort((a, b) => {
-      let aVal = a[sortField] || "";
-      let bVal = b[sortField] || "";
+  const totalPages = Math.max(1, Math.ceil(filteredStaff.length / pageSize));
+  const paginatedStaff = filteredStaff.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
-      if (sortField === "username") {
-        aVal = a.username;
-        bVal = b.username;
+  React.useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
+
+  const handleSaveStaff = async (formData: StaffFormData): Promise<StaffSaveResult> => {
+    if (!isAdmin) return "saved";
+
+    if (!editingStaff) {
+      const result = await staffApi<PendingEmailVerification>("/api/staff/invitations", {
+        method: "POST",
+        body: JSON.stringify(formData),
+      });
+      try {
+        await createPendingVerifiedAccount(
+          result.email,
+          result.temporaryPassword,
+          verificationUrl("/complete-invitation", result.verificationToken),
+        );
+      } catch (error) {
+        await staffApi("/api/staff/invitations", {
+          method: "DELETE",
+          body: JSON.stringify({ token: result.verificationToken }),
+        }).catch(() => undefined);
+        throw error;
       }
+      toast.success(`Firebase sent a verification email to ${result.email}.`);
+      return "saved";
+    }
 
-      const comparison = String(aVal).localeCompare(String(bVal));
-      return sortDirection === "asc" ? comparison : -comparison;
+    await staffApi<{ message: string }>(`/api/staff/${encodeURIComponent(editingStaff.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ action: "update", username: formData.username, role: formData.role }),
     });
 
-    return list;
-  }, [staffList, searchQuery, sortField, sortDirection]);
+    if (formData.email !== editingStaff.email.toLowerCase()) {
+      const result = await staffApi<PendingEmailVerification>(
+        `/api/staff/${encodeURIComponent(editingStaff.id)}/email-change`,
+        { method: "POST", body: JSON.stringify({ email: formData.email }) },
+      );
+      try {
+        await createPendingVerifiedAccount(
+          result.email,
+          result.temporaryPassword,
+          verificationUrl("/verify-email-change", result.verificationToken),
+        );
+      } catch (error) {
+        await staffApi(`/api/staff/${encodeURIComponent(editingStaff.id)}/email-change`, {
+          method: "DELETE",
+        }).catch(() => undefined);
+        throw error;
+      }
+      toast.success(`Firebase sent a verification email to ${result.email}.`);
+      return "verification-pending";
+    }
+    toast.success(`Updated account for ${formData.username}.`);
+    return "saved";
+  };
 
-  // Paginated data
-  const totalPages = Math.max(1, Math.ceil(filteredStaff.length / pageSize));
-  const paginatedStaff = React.useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredStaff.slice(start, start + pageSize);
-  }, [filteredStaff, currentPage, pageSize]);
+  const validateNewEmail = (email: string) => {
+    const existing = staffList.find(
+      (staff) => staff.id !== editingStaff?.id && staff.email.toLowerCase() === email.toLowerCase(),
+    );
+    if (!existing) return null;
+    return existing.accountStatus === "archived"
+      ? "This email belongs to an archived account. Reactivate that account instead."
+      : "A staff account already uses this email address.";
+  };
 
-  // Add / Edit handler
-  const handleSaveStaff = async (formData: StaffFormData) => {
-    if (!isAdmin) return;
-    if (editingStaff) {
-      // Update
-      await updateStaffMember(editingStaff.id, formData);
-      setStaffList((prev) => prev.map((item) => (item.id === editingStaff.id ? { ...item, ...formData } : item)));
-      toast.success(`Updated account for ${formData.username}`);
-    } else {
-      // Create
-      const newStaff = await addStaffMember(formData);
-      setStaffList((prev) => [newStaff, ...prev]);
-      toast.success(`Staff member ${formData.username} added successfully`);
+  const handleArchiveConfirm = async () => {
+    if (!isAdmin || !staffToArchive) return;
+    const result = await staffApi<{ message: string }>(`/api/staff/${encodeURIComponent(staffToArchive.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ action: "archive" }),
+    });
+    toast.success(result.message);
+  };
+
+  const handleReactivate = async (staff: StaffMember) => {
+    try {
+      const result = await staffApi<{ message: string }>(`/api/staff/${encodeURIComponent(staff.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ action: "reactivate" }),
+      });
+      toast.success(result.message);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to reactivate this account.");
     }
   };
 
-  // Delete handler
-  const handleDeleteConfirm = async () => {
-    if (!isAdmin || !staffToDelete) return;
-    await deleteStaffMember(staffToDelete.id);
-    setStaffList((prev) => prev.filter((item) => item.id !== staffToDelete.id));
-    toast.success(`Removed account for ${staffToDelete.username}`);
+  const handleCancelEmailVerification = async () => {
+    if (!editingStaff) return;
+    const result = await staffApi<CancelEmailVerificationResponse>(
+      `/api/staff/${encodeURIComponent(editingStaff.id)}/email-change`,
+      { method: "DELETE" },
+    );
+    toast.success(result.message);
   };
+
+  const activeEditingStaff = editingStaff
+    ? (staffList.find((staff) => staff.id === editingStaff.id) ?? editingStaff)
+    : null;
 
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold tracking-tight text-foreground md:text-3xl">Staff Information</h1>
-        <p className="text-sm text-muted-foreground">
-          Manage system administrator and operator staff accounts connected to Firebase Firestore.
+        <h1 className="font-bold text-2xl text-foreground tracking-tight md:text-3xl">Staff Information</h1>
+        <p className="text-muted-foreground text-sm">
+          Manage verified administrator and operator accounts connected to Firebase.
         </p>
       </div>
 
       <Card className="rounded-xl border shadow-xs">
         <CardContent className="p-4 md:p-6">
-          {/* Top Controls Row */}
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               {isAdmin && (
@@ -189,22 +274,21 @@ export function StaffTable() {
                   }}
                   className="h-9 gap-1.5 font-medium"
                 >
-                  <Plus className="size-4" />
-                  Add Staff
+                  <Plus data-icon="inline-start" />
+                  Add staff
                 </Button>
               )}
             </div>
-
             <div className="flex items-center gap-2">
-              <label htmlFor="staff-search-input" className="text-sm font-medium text-foreground">
+              <label htmlFor="staff-search-input" className="font-medium text-foreground text-sm">
                 Search:
               </label>
               <Input
                 id="staff-search-input"
                 placeholder="Search staff..."
                 value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
+                onChange={(event) => {
+                  setSearchQuery(event.target.value);
                   setCurrentPage(1);
                 }}
                 className="h-8 w-44 md:w-56"
@@ -212,172 +296,146 @@ export function StaffTable() {
             </div>
           </div>
 
-          {/* Table Container */}
           <div className="rounded-lg border">
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead
-                    onClick={() => handleSort("role")}
-                    className="cursor-pointer select-none font-semibold text-foreground"
-                  >
-                    <div className="flex items-center gap-1.5">
-                      Role
-                      <ArrowUpDown className="size-3.5 text-muted-foreground" />
-                    </div>
-                  </TableHead>
-
-                  <TableHead
-                    onClick={() => handleSort("username")}
-                    className="cursor-pointer select-none font-semibold text-foreground"
-                  >
-                    <div className="flex items-center gap-1.5">
-                      Username
-                      <ArrowUpDown className="size-3.5 text-muted-foreground" />
-                    </div>
-                  </TableHead>
-
-                  <TableHead
-                    onClick={() => handleSort("email")}
-                    className="cursor-pointer select-none font-semibold text-foreground"
-                  >
-                    <div className="flex items-center gap-1.5">
-                      Email
-                      <ArrowUpDown className="size-3.5 text-muted-foreground" />
-                    </div>
-                  </TableHead>
-
-                  <TableHead
-                    onClick={() => handleSort("password")}
-                    className="cursor-pointer select-none font-semibold text-foreground"
-                  >
-                    <div className="flex items-center gap-1.5">
-                      Password
-                      <ArrowUpDown className="size-3.5 text-muted-foreground" />
-                    </div>
-                  </TableHead>
-
-                  <TableHead
-                    onClick={() => handleSort("dateJoined")}
-                    className="cursor-pointer select-none font-semibold text-foreground"
-                  >
-                    <div className="flex items-center gap-1.5">
-                      Date Joined
-                      <ArrowUpDown className="size-3.5 text-muted-foreground" />
-                    </div>
-                  </TableHead>
-
-                  {isAdmin && (
-                    <TableHead className="text-right font-semibold text-foreground">
-                      <div className="flex items-center justify-end gap-1.5">
-                        Actions
+                  {[
+                    ["role", "Role"],
+                    ["username", "Username"],
+                    ["email", "Email"],
+                    ["accountStatus", "Account Status"],
+                    ["dateJoined", "Date Joined"],
+                  ].map(([field, label]) => (
+                    <TableHead
+                      key={field}
+                      onClick={() => handleSort(field as SortField)}
+                      className="cursor-pointer select-none font-semibold text-foreground"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        {label}
                         <ArrowUpDown className="size-3.5 text-muted-foreground" />
                       </div>
                     </TableHead>
-                  )}
+                  ))}
+                  {isAdmin && <TableHead className="text-right font-semibold text-foreground">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
-
               <TableBody>
-                {isLoading ? (
+                {isLoading && (
                   <TableRow>
-                    <TableCell colSpan={isAdmin ? 6 : 5} className="h-32 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={6} className="h-32 text-center text-muted-foreground text-sm">
                       Loading staff records...
                     </TableCell>
                   </TableRow>
-                ) : paginatedStaff.length === 0 ? (
+                )}
+                {!isLoading && paginatedStaff.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={isAdmin ? 6 : 5} className="h-32 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={6} className="h-32 text-center text-muted-foreground text-sm">
                       No staff records found matching your search.
                     </TableCell>
                   </TableRow>
-                ) : (
+                )}
+                {!isLoading &&
+                  paginatedStaff.length > 0 &&
                   paginatedStaff.map((staff) => {
-                    const isVisible = visiblePasswords[staff.id];
+                    const status = getAccountStatus(staff);
+                    const isOwnAccount =
+                      staff.uid === user?.uid || staff.authUid === user?.uid || staff.email === user?.email;
                     return (
                       <TableRow key={staff.id} className="hover:bg-muted/40">
                         <TableCell>
-                          <Badge
-                            variant={staff.role === "Administrator" ? "default" : "outline"}
-                            className="font-medium"
-                          >
-                            {staff.role}
-                          </Badge>
+                          <Badge variant={staff.role === "Administrator" ? "default" : "outline"}>{staff.role}</Badge>
                         </TableCell>
-
                         <TableCell className="font-medium text-foreground">{staff.username}</TableCell>
-
-                        <TableCell className="max-w-[180px] truncate text-muted-foreground">{staff.email}</TableCell>
-
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-sm tracking-wider text-muted-foreground">
-                              {isVisible ? staff.password || "••••••••" : maskPassword(staff.password)}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => togglePasswordVisibility(staff.id)}
-                              className="text-muted-foreground transition-colors hover:text-foreground"
-                              title={isVisible ? "Hide password" : "Show password"}
-                            >
-                              {isVisible ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-                            </button>
-                          </div>
+                        <TableCell className="max-w-[220px] text-muted-foreground">
+                          <span className="block truncate">{staff.email}</span>
                         </TableCell>
-
-                        <TableCell className="text-muted-foreground whitespace-nowrap">{staff.dateJoined}</TableCell>
-
+                        <TableCell>
+                          <Badge variant={status === "Verified Active" ? "secondary" : "outline"}>{status}</Badge>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-muted-foreground">{staff.dateJoined}</TableCell>
                         {isAdmin && (
                           <TableCell className="text-right">
                             <div className="flex items-center justify-end gap-1">
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                onClick={() => {
-                                  setEditingStaff(staff);
-                                  setDialogOpen(true);
-                                }}
-                                className="size-8 text-muted-foreground hover:text-foreground"
-                                title="Edit staff member"
-                              >
-                                <SquarePen className="size-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                onClick={() => {
-                                  setStaffToDelete(staff);
-                                  setDeleteDialogOpen(true);
-                                }}
-                                className="size-8 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                                title="Delete staff member"
-                              >
-                                <Trash2 className="size-4" />
-                              </Button>
+                              {staff.isInvitation && (
+                                <span className="px-2 text-muted-foreground text-xs">Awaiting verification</span>
+                              )}
+                              {!staff.isInvitation && staff.accountStatus === "archived" && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  onClick={() => void handleReactivate(staff)}
+                                  title="Reactivate staff account"
+                                >
+                                  <RotateCcw />
+                                  <span className="sr-only">Reactivate {staff.username}</span>
+                                </Button>
+                              )}
+                              {!staff.isInvitation && staff.accountStatus !== "archived" && (
+                                <>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    onClick={() => {
+                                      setStaffToReset(staff);
+                                      setResetDialogOpen(true);
+                                    }}
+                                    title="Reset password"
+                                  >
+                                    <KeyRound />
+                                    <span className="sr-only">Reset password for {staff.username}</span>
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    onClick={() => {
+                                      setEditingStaff(staff);
+                                      setDialogOpen(true);
+                                    }}
+                                    title="Edit staff member"
+                                  >
+                                    <SquarePen />
+                                    <span className="sr-only">Edit {staff.username}</span>
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    onClick={() => {
+                                      setStaffToArchive(staff);
+                                      setArchiveDialogOpen(true);
+                                    }}
+                                    disabled={isOwnAccount}
+                                    title={
+                                      isOwnAccount ? "You cannot archive your own account" : "Archive staff member"
+                                    }
+                                  >
+                                    <Archive />
+                                    <span className="sr-only">Archive {staff.username}</span>
+                                  </Button>
+                                </>
+                              )}
                             </div>
                           </TableCell>
                         )}
                       </TableRow>
                     );
-                  })
-                )}
+                  })}
               </TableBody>
             </Table>
           </div>
 
-          {/* Pagination Controls */}
-          <div className="mt-4 flex items-center justify-end gap-1 text-sm text-muted-foreground">
+          <div className="mt-4 flex items-center justify-end gap-1 text-muted-foreground text-sm">
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
               disabled={currentPage <= 1}
               className="h-8 px-3 text-xs"
             >
               Previous
             </Button>
-
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+            {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => (
               <Button
                 key={page}
                 variant={currentPage === page ? "default" : "outline"}
@@ -388,11 +446,10 @@ export function StaffTable() {
                 {page}
               </Button>
             ))}
-
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
               disabled={currentPage >= totalPages}
               className="h-8 px-3 text-xs"
             >
@@ -402,22 +459,23 @@ export function StaffTable() {
         </CardContent>
       </Card>
 
-      {/* Dialogs - only accessible by Admin */}
       {isAdmin && (
         <>
           <StaffDialog
             open={dialogOpen}
             onOpenChange={setDialogOpen}
-            staffToEdit={editingStaff}
+            staffToEdit={activeEditingStaff}
             onSave={handleSaveStaff}
+            onCancelVerification={handleCancelEmailVerification}
+            validateNewEmail={validateNewEmail}
           />
-
-          <DeleteStaffDialog
-            open={deleteDialogOpen}
-            onOpenChange={setDeleteDialogOpen}
-            staff={staffToDelete}
-            onConfirmDelete={handleDeleteConfirm}
+          <ArchiveStaffDialog
+            open={archiveDialogOpen}
+            onOpenChange={setArchiveDialogOpen}
+            staff={staffToArchive}
+            onConfirmArchive={handleArchiveConfirm}
           />
+          <PasswordResetDialog open={resetDialogOpen} onOpenChange={setResetDialogOpen} staff={staffToReset} />
         </>
       )}
     </div>

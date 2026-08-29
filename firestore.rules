@@ -1,0 +1,60 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function currentStaff() {
+      return get(/databases/$(database)/documents/staff/$(request.auth.uid));
+    }
+
+    function activeStaff() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/staff/$(request.auth.uid))
+        && currentStaff().data.accountStatus != "archived"
+        && currentStaff().data.status != "archived";
+    }
+
+    function administrator() {
+      return activeStaff() && currentStaff().data.role == "Administrator";
+    }
+
+    match /staff/{staffId} {
+      allow read: if administrator()
+        || (signedIn() && (
+          staffId == request.auth.uid
+          || resource.data.uid == request.auth.uid
+          || resource.data.authUid == request.auth.uid
+          || resource.data.normalizedEmail == request.auth.token.email
+        ));
+
+      // Staff roles, status, UID links, email state, and reset timestamps are server-managed.
+      allow create, update, delete: if false;
+    }
+
+    match /pendingStaffInvitations/{document=**} {
+      allow read: if administrator();
+      allow write: if false;
+    }
+
+    match /staffEmailChanges/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /passwordResetSessions/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /trafficEvents/{eventId} {
+      allow read: if activeStaff();
+      allow write: if false;
+    }
+
+    match /systemEvents/{eventId} {
+      allow read: if activeStaff();
+      allow write: if false;
+    }
+  }
+}

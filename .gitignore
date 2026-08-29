@@ -19,6 +19,8 @@
 # misc
 .DS_Store
 *.pem
+*firebase-adminsdk*.json
+*service-account*.json
 *.sh
 
 # debug

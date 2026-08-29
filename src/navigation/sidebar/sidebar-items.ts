@@ -76,20 +76,23 @@ function isAllowedForRole(roles: StaffRole[] | undefined, role: StaffRole | null
 }
 
 export function getSidebarItemsForRole(role: StaffRole | null): NavGroup[] {
-  return sidebarItems.flatMap((group) => {
-    const items = group.items.flatMap((item) => {
-      if (!isAllowedForRole(item.roles, role)) {
-        return [];
+  const groups: NavGroup[] = [];
+
+  for (const group of sidebarItems) {
+    const items: NavMainItem[] = [];
+    for (const item of group.items) {
+      if (!isAllowedForRole(item.roles, role)) continue;
+
+      if ("subItems" in item && item.subItems) {
+        const subItems = item.subItems.filter((subItem) => isAllowedForRole(subItem.roles, role));
+        if (subItems.length > 0) items.push({ ...item, subItems });
+      } else {
+        items.push(item);
       }
+    }
 
-      if (!item.subItems) {
-        return [item];
-      }
+    if (items.length > 0) groups.push({ ...group, items });
+  }
 
-      const subItems = item.subItems.filter((subItem) => isAllowedForRole(subItem.roles, role));
-      return subItems.length > 0 ? [{ ...item, subItems }] : [];
-    });
-
-    return items.length > 0 ? [{ ...group, items }] : [];
-  });
+  return groups;
 }

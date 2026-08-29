@@ -12,8 +12,10 @@ export function ProtectedDashboard({ children }: { children: React.ReactNode }) 
   const router = useRouter();
   const pathname = usePathname();
   const isStaffRoute = pathname === "/dashboard/staff" || pathname.startsWith("/dashboard/staff/");
-  const isCheckingStaffAccess = Boolean(user && isStaffRoute && staffLoading);
+  const isCheckingStaffAccess = Boolean(configured && user && staffLoading);
+  const isMissingStaffAccess = Boolean(configured && user && !staffLoading && !staffRole);
   const isStaffAccessDenied = Boolean(user && isStaffRoute && !staffLoading && staffRole !== "Administrator");
+  const isAccessDenied = isMissingStaffAccess || isStaffAccessDenied;
 
   useEffect(() => {
     if (!loading && configured && !user) {
@@ -21,17 +23,17 @@ export function ProtectedDashboard({ children }: { children: React.ReactNode }) 
       return;
     }
 
-    if (isStaffAccessDenied) {
+    if (isAccessDenied) {
       router.replace("/unauthorized");
     }
-  }, [configured, isStaffAccessDenied, loading, pathname, router, user]);
+  }, [configured, isAccessDenied, loading, pathname, router, user]);
 
-  if (loading || (configured && !user) || isCheckingStaffAccess || isStaffAccessDenied)
+  if (loading || (configured && !user) || isCheckingStaffAccess || isAccessDenied)
     return (
       <div className="flex min-h-screen items-center justify-center">
         <Spinner />
         <span className="ml-2 text-muted-foreground">
-          {isCheckingStaffAccess || isStaffAccessDenied ? "Checking permissions..." : "Checking session..."}
+          {isCheckingStaffAccess || isAccessDenied ? "Checking permissions..." : "Checking session..."}
         </span>
       </div>
     );
