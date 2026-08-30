@@ -47,10 +47,11 @@ export function getFirebaseEmailError(error: unknown) {
   return error.message || "Firebase could not send the email.";
 }
 
-export async function sendNativePasswordReset(email: string) {
+export async function sendNativePasswordReset(email: string, requestId: string) {
   const primaryAuth = requirePrimaryAuth();
   const continueUrl = new URL("/login", window.location.origin);
   continueUrl.searchParams.set("passwordReset", "success");
+  continueUrl.searchParams.set("requestId", requestId);
   await sendPasswordResetEmail(primaryAuth, email.trim().toLowerCase(), { url: continueUrl.toString() });
 }
 

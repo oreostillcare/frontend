@@ -33,9 +33,79 @@ const formSchema = z.object({
   password: z.string().min(1, { message: "Please enter your password." }),
 });
 
+interface LoginAttemptRecord {
+  aliases: string[];
+  failedAttempts: number;
+  lockedUntil: number;
+}
+
+type LoginAttemptStore = Record<string, LoginAttemptRecord>;
+
+const LOGIN_ATTEMPTS_STORAGE_KEY = "smartroad.login-attempts.v1";
+const LOGIN_LOCK_MS = 180_000;
+let volatileLoginAttemptStore: LoginAttemptStore = {};
+
 function formatCountdown(seconds: number) {
   const minutes = Math.floor(seconds / 60);
   return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function readLoginAttemptStore(): LoginAttemptStore {
+  try {
+    const stored = window.localStorage.getItem(LOGIN_ATTEMPTS_STORAGE_KEY);
+    volatileLoginAttemptStore = stored ? (JSON.parse(stored) as LoginAttemptStore) : volatileLoginAttemptStore;
+    return volatileLoginAttemptStore;
+  } catch {
+    return volatileLoginAttemptStore;
+  }
+}
+
+function writeLoginAttemptStore(store: LoginAttemptStore) {
+  volatileLoginAttemptStore = store;
+  try {
+    window.localStorage.setItem(LOGIN_ATTEMPTS_STORAGE_KEY, JSON.stringify(store));
+  } catch {
+    // The in-memory store still enforces the current page lock when browser storage is unavailable.
+  }
+}
+
+function findLoginAttemptRecord(identifier: string) {
+  const normalizedIdentifier = identifier.trim().toLowerCase();
+  const store = readLoginAttemptStore();
+  const match = Object.entries(store).find(
+    ([email, record]) => email === normalizedIdentifier || record.aliases.includes(normalizedIdentifier),
+  );
+  if (!match) return null;
+
+  const [email, record] = match;
+  if (record.lockedUntil && record.lockedUntil <= Date.now()) {
+    delete store[email];
+    writeLoginAttemptStore(store);
+    return null;
+  }
+  return { email, record };
+}
+
+function recordFailedLogin(email: string, identifier: string) {
+  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedIdentifier = identifier.trim().toLowerCase();
+  const store = readLoginAttemptStore();
+  const current = store[normalizedEmail];
+  const currentAttempts =
+    current?.lockedUntil && current.lockedUntil <= Date.now() ? 0 : (current?.failedAttempts ?? 0);
+  const failedAttempts = currentAttempts + 1;
+  const lockedUntil = failedAttempts >= 3 ? Date.now() + LOGIN_LOCK_MS : 0;
+  const aliases = Array.from(new Set([normalizedEmail, normalizedIdentifier, ...(current?.aliases ?? [])]));
+  const record = { aliases, failedAttempts, lockedUntil };
+  store[normalizedEmail] = record;
+  writeLoginAttemptStore(store);
+  return record;
+}
+
+function clearLoginAttemptRecord(email: string) {
+  const store = readLoginAttemptStore();
+  delete store[email.trim().toLowerCase()];
+  writeLoginAttemptStore(store);
 }
 
 async function resolveLoginEmail(identifier: string) {
@@ -54,13 +124,17 @@ export function LoginForm() {
   const [resetOpen, setResetOpen] = React.useState(false);
   const [resetEmail, setResetEmail] = React.useState("");
   const [resetPending, setResetPending] = React.useState(false);
-  const [resetState, setResetState] = React.useState<"idle" | "waiting" | "completed" | "error">("idle");
+  const [resetState, setResetState] = React.useState<"idle" | "active" | "cancelled" | "completed" | "error">("idle");
   const [resetMessage, setResetMessage] = React.useState("");
-  const [resetTrackingToken, setResetTrackingToken] = React.useState("");
+  const [resetError, setResetError] = React.useState("");
+  const [resetRequestId, setResetRequestId] = React.useState("");
   const [resetCooldownEnd, setResetCooldownEnd] = React.useState(0);
   const [resetNow, setResetNow] = React.useState(Date.now());
   const [loginNotice, setLoginNotice] = React.useState("");
-  const [failedAttempts, setFailedAttempts] = React.useState(0);
+  const [loginFailedAttempts, setLoginFailedAttempts] = React.useState(0);
+  const [loginLockedUntil, setLoginLockedUntil] = React.useState(0);
+  const [loginLockedEmail, setLoginLockedEmail] = React.useState("");
+  const [loginNow, setLoginNow] = React.useState(Date.now());
   const [lastResolvedEmail, setLastResolvedEmail] = React.useState("");
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -69,34 +143,64 @@ export function LoginForm() {
       password: "",
     },
   });
+  const currentIdentifier = form.watch("identifier");
 
   React.useEffect(() => {
     const currentUrl = new URL(window.location.href);
     if (currentUrl.searchParams.get("passwordReset") !== "success") return;
-    setLoginNotice("Your password was reset successfully. Sign in using your new password.");
+    const requestId = currentUrl.searchParams.get("requestId");
     currentUrl.searchParams.delete("passwordReset");
+    currentUrl.searchParams.delete("requestId");
     window.history.replaceState(window.history.state, "", currentUrl);
+
+    if (!requestId) return;
+    const verifyCompletedReset = async () => {
+      try {
+        const response = await fetch(`/api/auth/password-reset?requestId=${encodeURIComponent(requestId)}`, {
+          cache: "no-store",
+        });
+        const payload = (await response.json()) as { status?: "active" | "completed" };
+        if (response.ok && payload.status === "completed") {
+          setLoginNotice("Your password was reset successfully. Sign in using your new password.");
+        }
+      } catch {
+        // Do not show a success message unless the tracked Firebase reset can be confirmed.
+      }
+    };
+    void verifyCompletedReset();
   }, []);
 
   React.useEffect(() => {
-    if (!resetOpen || resetState !== "waiting" || !resetTrackingToken) return;
+    if (!loginNotice) return;
+    const timeout = window.setTimeout(() => setLoginNotice(""), 4000);
+    return () => window.clearTimeout(timeout);
+  }, [loginNotice]);
+
+  React.useEffect(() => {
+    if (!resetOpen || resetState !== "active" || !resetRequestId) return;
     let cancelled = false;
 
     const checkResetStatus = async () => {
       try {
-        const response = await fetch(`/api/auth/password-reset?token=${encodeURIComponent(resetTrackingToken)}`, {
+        const response = await fetch(`/api/auth/password-reset?requestId=${encodeURIComponent(resetRequestId)}`, {
           cache: "no-store",
         });
-        const payload = (await response.json()) as { status?: "pending" | "completed"; error?: string };
+        const payload = (await response.json()) as { status?: "active" | "completed"; error?: string };
+        if (!response.ok && response.status === 410) {
+          if (cancelled) return;
+          setResetState("cancelled");
+          setResetMessage(payload.error ?? "Password reset request cancelled.");
+          setResetError("");
+          return;
+        }
         if (!response.ok) throw new Error(payload.error ?? "Unable to check the password reset status.");
         if (cancelled || payload.status !== "completed") return;
         setResetState("completed");
         setResetMessage("Firebase confirmed that your password was changed successfully.");
-        setLoginNotice("Your password was reset successfully. Sign in using your new password.");
+        setResetError("");
       } catch (error) {
         if (cancelled) return;
-        setResetState("error");
-        setResetMessage(error instanceof Error ? error.message : "Unable to check the password reset status.");
+        setResetError(error instanceof Error ? error.message : "Unable to check the password reset status.");
       }
     };
 
@@ -106,7 +210,7 @@ export function LoginForm() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [resetOpen, resetState, resetTrackingToken]);
+  }, [resetOpen, resetRequestId, resetState]);
 
   React.useEffect(() => {
     if (!resetOpen || resetState !== "completed") return;
@@ -114,11 +218,11 @@ export function LoginForm() {
       setResetOpen(false);
       setResetState("idle");
       setResetMessage("");
-      setResetTrackingToken("");
-      router.replace("/login?passwordReset=success");
-    }, 1500);
+      setResetError("");
+      setResetRequestId("");
+    }, 4000);
     return () => window.clearTimeout(timeout);
-  }, [resetOpen, resetState, router]);
+  }, [resetOpen, resetState]);
 
   React.useEffect(() => {
     if (!resetOpen || resetCooldownEnd <= Date.now()) return;
@@ -126,6 +230,36 @@ export function LoginForm() {
     const interval = window.setInterval(() => setResetNow(Date.now()), 1000);
     return () => window.clearInterval(interval);
   }, [resetCooldownEnd, resetOpen]);
+
+  React.useEffect(() => {
+    const match = findLoginAttemptRecord(currentIdentifier);
+    if (!match) {
+      setLoginFailedAttempts(0);
+      setLoginLockedUntil(0);
+      setLoginLockedEmail("");
+      return;
+    }
+
+    setLoginFailedAttempts(match.record.failedAttempts);
+    setLoginLockedUntil(match.record.lockedUntil);
+    setLoginLockedEmail(match.email);
+    setLoginNow(Date.now());
+  }, [currentIdentifier]);
+
+  React.useEffect(() => {
+    if (!loginLockedUntil || loginLockedUntil <= Date.now()) return;
+    setLoginNow(Date.now());
+    const interval = window.setInterval(() => {
+      const currentTime = Date.now();
+      setLoginNow(currentTime);
+      if (currentTime < loginLockedUntil) return;
+      if (loginLockedEmail) clearLoginAttemptRecord(loginLockedEmail);
+      setLoginFailedAttempts(0);
+      setLoginLockedUntil(0);
+      setLoginLockedEmail("");
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [loginLockedEmail, loginLockedUntil]);
 
   async function handlePasswordReset(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -136,51 +270,77 @@ export function LoginForm() {
       return;
     }
 
-    let trackingToken = "";
+    let requestId = "";
     try {
       setResetPending(true);
       setResetState("idle");
       setResetMessage("");
+      setResetError("");
       const trackingResponse = await fetch("/api/auth/password-reset", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
       const trackingPayload = (await trackingResponse.json()) as {
-        trackingToken?: string;
+        requestId?: string;
         cooldownEndsAt?: string;
         error?: string;
       };
-      if (!trackingResponse.ok || !trackingPayload.trackingToken) {
+      if (!trackingResponse.ok || !trackingPayload.requestId) {
         if (trackingPayload.cooldownEndsAt) {
           setResetCooldownEnd(Date.parse(trackingPayload.cooldownEndsAt));
           setResetNow(Date.now());
         }
         throw new Error(trackingPayload.error ?? "Unable to prepare this password reset.");
       }
-      trackingToken = trackingPayload.trackingToken;
-      await sendNativePasswordReset(email);
+      requestId = trackingPayload.requestId;
       if (trackingPayload.cooldownEndsAt) {
         setResetCooldownEnd(Date.parse(trackingPayload.cooldownEndsAt));
         setResetNow(Date.now());
       }
-      setResetTrackingToken(trackingToken);
-      setResetState("waiting");
-      setResetMessage(
-        "Reset email sent. Open the link from your inbox; this window will update after the password changes.",
-      );
-      setFailedAttempts(0);
+      await sendNativePasswordReset(email, requestId);
+      setResetRequestId(requestId);
+      setResetState("active");
+      setResetMessage("Reset email sent. Open the link from your inbox to choose a new password.");
     } catch (error) {
       console.error("Password reset error:", error);
-      if (trackingToken) {
+      if (requestId) {
         await fetch("/api/auth/password-reset", {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token: trackingToken }),
+          body: JSON.stringify({ requestId }),
         }).catch(() => undefined);
       }
       setResetState("error");
       setResetMessage(getFirebaseEmailError(error));
+    } finally {
+      setResetPending(false);
+    }
+  }
+
+  async function cancelPasswordReset() {
+    if (!resetRequestId || resetState !== "active") return;
+    const previousMessage = resetMessage;
+    setResetPending(true);
+    setResetState("cancelled");
+    setResetMessage("Password reset request cancelled.");
+    setResetError("");
+    try {
+      const response = await fetch("/api/auth/password-reset", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId: resetRequestId }),
+      });
+      const payload = (await response.json()) as { status?: "cancelled" | "completed"; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Unable to cancel the password reset request.");
+      if (payload.status === "completed") {
+        setResetState("completed");
+        setResetMessage("Firebase confirmed that your password was changed successfully.");
+      }
+    } catch (error) {
+      setResetState("active");
+      setResetMessage(previousMessage);
+      setResetError(error instanceof Error ? error.message : "Unable to cancel the password reset request.");
     } finally {
       setResetPending(false);
     }
@@ -199,8 +359,21 @@ export function LoginForm() {
       resolvedEmail = await resolveLoginEmail(data.identifier.trim());
       setLastResolvedEmail(resolvedEmail);
 
+      const existingAttempt = findLoginAttemptRecord(resolvedEmail);
+      if (existingAttempt?.record.lockedUntil && existingAttempt.record.lockedUntil > Date.now()) {
+        setLoginFailedAttempts(existingAttempt.record.failedAttempts);
+        setLoginLockedUntil(existingAttempt.record.lockedUntil);
+        setLoginLockedEmail(existingAttempt.email);
+        setLoginNow(Date.now());
+        form.clearErrors("root");
+        return;
+      }
+
       await signInWithEmailAndPassword(auth, resolvedEmail, data.password);
-      setFailedAttempts(0);
+      clearLoginAttemptRecord(resolvedEmail);
+      setLoginFailedAttempts(0);
+      setLoginLockedUntil(0);
+      setLoginLockedEmail("");
       const searchParams = new URLSearchParams(window.location.search);
       const nextPath = searchParams.get("next");
       router.replace(nextPath || "/dashboard");
@@ -233,7 +406,13 @@ export function LoginForm() {
             error.code === "auth/user-not-found" ||
             error.code === "auth/wrong-password" ||
             error.code === "auth/invalid-email"));
-      if (isCredentialMistake) setFailedAttempts((attempts) => attempts + 1);
+      if (isCredentialMistake && resolvedEmail) {
+        const attempt = recordFailedLogin(resolvedEmail, data.identifier);
+        setLoginFailedAttempts(attempt.failedAttempts);
+        setLoginLockedUntil(attempt.lockedUntil);
+        setLoginLockedEmail(resolvedEmail.trim().toLowerCase());
+        setLoginNow(Date.now());
+      }
       if (resolvedEmail) setLastResolvedEmail(resolvedEmail);
       form.setError("root", {
         message,
@@ -242,28 +421,35 @@ export function LoginForm() {
   }
 
   const openPasswordReset = () => {
+    if (resetState === "active") {
+      setResetOpen(true);
+      return;
+    }
     const identifier = form.getValues("identifier").trim().toLowerCase();
     setResetEmail(lastResolvedEmail || (identifier.includes("@") ? identifier : ""));
     setResetState("idle");
     setResetMessage("");
-    setResetTrackingToken("");
+    setResetError("");
+    setResetRequestId("");
     setResetOpen(true);
   };
 
   const handleResetOpenChange = (nextOpen: boolean) => {
     if (resetPending) return;
     setResetOpen(nextOpen);
-    if (!nextOpen) {
+    if (!nextOpen && resetState !== "active") {
       setResetState("idle");
       setResetMessage("");
-      setResetTrackingToken("");
+      setResetError("");
+      setResetRequestId("");
     }
   };
 
   const remainingResetCooldown = Math.max(0, Math.ceil((resetCooldownEnd - resetNow) / 1000));
+  const remainingLoginCooldown = Math.max(0, Math.ceil((loginLockedUntil - loginNow) / 1000));
+  const loginIsLocked = remainingLoginCooldown > 0;
   let resetActionLabel = "Send reset email";
   if (resetPending) resetActionLabel = "Sending reset email...";
-  else if (resetState === "waiting") resetActionLabel = "Waiting for reset...";
   else if (resetState === "completed") resetActionLabel = "Done";
   else if (remainingResetCooldown > 0) resetActionLabel = `Resend in ${formatCountdown(remainingResetCooldown)}`;
 
@@ -310,6 +496,11 @@ export function LoginForm() {
                 disabled={form.formState.isSubmitting}
               />
               {fieldState.invalid && <FieldError errors={[fieldState.error]} />}
+              {loginIsLocked && (
+                <p className="text-destructive text-sm" role="alert">
+                  Too many sign-in attempts. Try again in {remainingLoginCooldown} seconds.
+                </p>
+              )}
             </Field>
           )}
         />
@@ -326,7 +517,7 @@ export function LoginForm() {
           <AlertDescription>{loginNotice}</AlertDescription>
         </Alert>
       )}
-      {failedAttempts >= 3 && (
+      {loginFailedAttempts >= 3 && loginIsLocked && (
         <Alert className="pr-2.5">
           <KeyRound />
           <AlertTitle>Having trouble signing in?</AlertTitle>
@@ -340,7 +531,7 @@ export function LoginForm() {
           </AlertAction>
         </Alert>
       )}
-      <Button className="w-full" disabled={form.formState.isSubmitting} type="submit">
+      <Button className="w-full" disabled={form.formState.isSubmitting || loginIsLocked} type="submit">
         {form.formState.isSubmitting && <Spinner data-icon="inline-start" />}
         {form.formState.isSubmitting ? "Signing in..." : "Login"}
       </Button>
@@ -351,11 +542,7 @@ export function LoginForm() {
           </Button>
         </DialogTrigger>
         <DialogContent className="sm:max-w-md" showCloseButton={!resetPending}>
-          <form
-            className="flex flex-col gap-4"
-            onSubmit={handlePasswordReset}
-            aria-busy={resetPending || resetState === "waiting"}
-          >
+          <form className="flex flex-col gap-4" onSubmit={handlePasswordReset} aria-busy={resetPending}>
             <DialogHeader>
               <DialogTitle>Reset your password</DialogTitle>
               <DialogDescription>
@@ -364,7 +551,7 @@ export function LoginForm() {
             </DialogHeader>
             <FieldGroup>
               <Field
-                data-disabled={resetPending || resetState === "waiting" || resetState === "completed" || undefined}
+                data-disabled={resetPending || resetState === "active" || resetState === "completed" || undefined}
                 data-invalid={resetState === "error" || undefined}
               >
                 <FieldLabel htmlFor="reset-email">Email address</FieldLabel>
@@ -376,11 +563,12 @@ export function LoginForm() {
                     setResetEmail(event.target.value);
                     setResetState("idle");
                     setResetMessage("");
+                    setResetError("");
                   }}
                   autoComplete="email"
                   placeholder="name@example.com"
                   aria-invalid={resetState === "error"}
-                  disabled={resetPending || resetState === "waiting" || resetState === "completed"}
+                  disabled={resetPending || resetState === "active" || resetState === "completed"}
                   required
                 />
               </Field>
@@ -388,14 +576,25 @@ export function LoginForm() {
             {resetPending && (
               <Alert>
                 <Spinner />
-                <AlertTitle>Sending reset email</AlertTitle>
-                <AlertDescription>Please wait while Firebase prepares your secure reset link.</AlertDescription>
+                <AlertTitle>{resetState === "cancelled" ? "Cancelling reset" : "Sending reset email"}</AlertTitle>
+                <AlertDescription>
+                  {resetState === "cancelled"
+                    ? "Please wait while SmartRoad cancels this request."
+                    : "Please wait while Firebase prepares your secure reset link."}
+                </AlertDescription>
               </Alert>
             )}
-            {!resetPending && resetState === "waiting" && (
+            {!resetPending && resetState === "active" && (
               <Alert>
-                <Spinner />
-                <AlertTitle>Waiting for password change</AlertTitle>
+                <CheckCircle2 />
+                <AlertTitle>Reset email sent</AlertTitle>
+                <AlertDescription>{resetMessage}</AlertDescription>
+              </Alert>
+            )}
+            {!resetPending && resetState === "cancelled" && (
+              <Alert>
+                <CheckCircle2 />
+                <AlertTitle>Password reset cancelled</AlertTitle>
                 <AlertDescription>{resetMessage}</AlertDescription>
               </Alert>
             )}
@@ -412,6 +611,12 @@ export function LoginForm() {
                 <AlertDescription>{resetMessage}</AlertDescription>
               </Alert>
             )}
+            {!resetPending && resetError && (
+              <Alert variant="destructive">
+                <AlertTitle>Unable to cancel password reset</AlertTitle>
+                <AlertDescription>{resetError}</AlertDescription>
+              </Alert>
+            )}
             <DialogFooter className="sm:items-center">
               <Button
                 type="button"
@@ -420,17 +625,32 @@ export function LoginForm() {
                 onClick={() => handleResetOpenChange(false)}
                 disabled={resetPending}
               >
-                {resetState === "waiting" || resetState === "completed" ? "Close" : "Cancel"}
+                Close
               </Button>
-              <Button
-                type={resetState === "completed" ? "button" : "submit"}
-                className="w-full sm:w-auto"
-                onClick={resetState === "completed" ? () => handleResetOpenChange(false) : undefined}
-                disabled={resetPending || resetState === "waiting" || remainingResetCooldown > 0}
-              >
-                {(resetPending || resetState === "waiting") && <Spinner data-icon="inline-start" />}
-                {resetActionLabel}
-              </Button>
+              {resetState === "active" ? (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="w-full sm:w-auto"
+                  onClick={() => void cancelPasswordReset()}
+                  disabled={resetPending}
+                >
+                  {resetPending && <Spinner data-icon="inline-start" />}
+                  Cancel reset
+                </Button>
+              ) : (
+                resetState !== "completed" &&
+                !(resetPending && resetState === "cancelled") && (
+                  <Button
+                    type="submit"
+                    className="w-full sm:w-auto"
+                    disabled={resetPending || remainingResetCooldown > 0}
+                  >
+                    {resetPending && <Spinner data-icon="inline-start" />}
+                    {resetActionLabel}
+                  </Button>
+                )
+              )}
             </DialogFooter>
           </form>
         </DialogContent>

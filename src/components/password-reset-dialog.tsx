@@ -16,7 +16,6 @@ import {
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { getFirebaseEmailError, sendNativePasswordReset } from "@/lib/firebase/auth-email";
-import { StaffApiError, staffApi } from "@/lib/firebase/staff-api";
 
 interface PasswordResetTarget {
   id: string;
@@ -34,6 +33,8 @@ interface PasswordResetDialogProps {
   staff: PasswordResetTarget | null;
 }
 
+type ResetStatus = "idle" | "active" | "cancelled" | "completed" | "error";
+
 const COOLDOWN_SECONDS = 180;
 
 function getCooldownEnd(requestedAt?: string) {
@@ -46,26 +47,47 @@ function formatCountdown(seconds: number) {
   return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+async function readResetResponse(response: Response) {
+  const payload = (await response.json()) as {
+    status?: "active" | "cancelled" | "completed";
+    requestId?: string;
+    cooldownEndsAt?: string;
+    error?: string;
+  };
+  if (!response.ok) {
+    const error = new Error(payload.error ?? "The SmartRoad password reset request failed.") as Error & {
+      cooldownEndsAt?: string;
+      status?: number;
+    };
+    error.cooldownEndsAt = payload.cooldownEndsAt;
+    error.status = response.status;
+    throw error;
+  }
+  return payload;
+}
+
 export function PasswordResetDialog({ open, onOpenChange, staff }: PasswordResetDialogProps) {
-  const [isSending, setIsSending] = React.useState(false);
+  const [isProcessing, setIsProcessing] = React.useState(false);
   const [message, setMessage] = React.useState("");
   const [error, setError] = React.useState("");
   const [cooldownEnd, setCooldownEnd] = React.useState(0);
   const [now, setNow] = React.useState(Date.now());
-  const [resetStatus, setResetStatus] = React.useState<"idle" | "pending" | "completed" | "failed">("idle");
+  const [requestId, setRequestId] = React.useState("");
+  const [resetStatus, setResetStatus] = React.useState<ResetStatus>("idle");
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Reset dialog state when the selected staff member changes.
+  React.useEffect(() => {
+    setMessage("");
+    setError("");
+    setRequestId("");
+    setResetStatus("idle");
+    setNow(Date.now());
+  }, [staff?.id]);
 
   React.useEffect(() => {
-    if (!open) return;
-    setMessage(
-      staff?.passwordResetStatus === "completed"
-        ? "Firebase confirmed that this account's password was changed successfully."
-        : "",
-    );
-    setError("");
-    setResetStatus(staff?.passwordResetStatus ?? "idle");
     setCooldownEnd(getCooldownEnd(staff?.passwordResetRequestedAt));
     setNow(Date.now());
-  }, [open, staff?.passwordResetRequestedAt, staff?.passwordResetStatus]);
+  }, [staff?.passwordResetRequestedAt]);
 
   React.useEffect(() => {
     if (!open || cooldownEnd <= Date.now()) return;
@@ -74,20 +96,28 @@ export function PasswordResetDialog({ open, onOpenChange, staff }: PasswordReset
   }, [cooldownEnd, open]);
 
   React.useEffect(() => {
-    if (!open || !staff || resetStatus !== "pending") return;
+    if (!open || resetStatus !== "active" || !requestId) return;
     let cancelled = false;
 
     const checkStatus = async () => {
       try {
-        const result = await staffApi<{ status: "idle" | "pending" | "completed"; completedAt?: string }>(
-          `/api/staff/password-reset?staffId=${encodeURIComponent(staff.id)}`,
-        );
+        const response = await fetch(`/api/auth/password-reset?requestId=${encodeURIComponent(requestId)}`, {
+          cache: "no-store",
+        });
+        const result = await readResetResponse(response);
         if (cancelled || result.status !== "completed") return;
         setResetStatus("completed");
         setMessage("Firebase confirmed that this account's password was changed successfully.");
         setError("");
       } catch (caughtError) {
-        if (!cancelled) console.error("Password reset status error:", caughtError);
+        if (cancelled) return;
+        if ((caughtError as { status?: number }).status === 410) {
+          setResetStatus("cancelled");
+          setMessage(caughtError instanceof Error ? caughtError.message : "Password reset request cancelled.");
+          setError("");
+          return;
+        }
+        console.error("Password reset status error:", caughtError);
       }
     };
 
@@ -97,49 +127,107 @@ export function PasswordResetDialog({ open, onOpenChange, staff }: PasswordReset
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [open, resetStatus, staff]);
+  }, [open, requestId, resetStatus]);
+
+  React.useEffect(() => {
+    if (!open || resetStatus !== "completed") return;
+    const timeout = window.setTimeout(() => {
+      setMessage("");
+      setError("");
+      setRequestId("");
+      setResetStatus("idle");
+      onOpenChange(false);
+    }, 4000);
+    return () => window.clearTimeout(timeout);
+  }, [onOpenChange, open, resetStatus]);
 
   const remainingSeconds = Math.max(0, Math.ceil((cooldownEnd - now) / 1000));
   const isArchived = staff?.accountStatus === "archived";
 
   const sendReset = async () => {
     if (!staff || isArchived) return;
-    let resetPrepared = false;
+    let createdRequestId = "";
     try {
-      setIsSending(true);
+      setIsProcessing(true);
       setError("");
       setMessage("");
-      const result = await staffApi<{ message: string; cooldownEndsAt: string }>("/api/staff/password-reset", {
+      const response = await fetch("/api/auth/password-reset", {
         method: "POST",
-        body: JSON.stringify({ staffId: staff.id }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: staff.email }),
       });
-      resetPrepared = true;
-      await sendNativePasswordReset(staff.email);
-      setResetStatus("pending");
-      setMessage(`Firebase sent the reset link to ${staff.email}. This status will update after the password changes.`);
-      setCooldownEnd(Date.parse(result.cooldownEndsAt));
-      setNow(Date.now());
-    } catch (caughtError) {
-      if (resetPrepared) {
-        await staffApi("/api/staff/password-reset", {
-          method: "DELETE",
-          body: JSON.stringify({ staffId: staff.id }),
-        }).catch(() => undefined);
-      }
-      if (caughtError instanceof StaffApiError && caughtError.cooldownEndsAt) {
-        setCooldownEnd(Date.parse(caughtError.cooldownEndsAt));
+      const result = await readResetResponse(response);
+      if (!result.requestId) throw new Error("Unable to prepare this password reset request.");
+      createdRequestId = result.requestId;
+      if (result.cooldownEndsAt) {
+        setCooldownEnd(Date.parse(result.cooldownEndsAt));
         setNow(Date.now());
       }
-      setResetStatus("failed");
+      await sendNativePasswordReset(staff.email, createdRequestId);
+      setRequestId(createdRequestId);
+      setResetStatus("active");
+      setMessage(`Reset email sent to ${staff.email}. Open the link to choose a new password.`);
+    } catch (caughtError) {
+      if (createdRequestId) {
+        await fetch("/api/auth/password-reset", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ requestId: createdRequestId }),
+        }).catch(() => undefined);
+      }
+      const cooldownEndsAt = (caughtError as { cooldownEndsAt?: string }).cooldownEndsAt;
+      if (cooldownEndsAt) {
+        setCooldownEnd(Date.parse(cooldownEndsAt));
+        setNow(Date.now());
+      }
+      setResetStatus("error");
       setError(getFirebaseEmailError(caughtError));
     } finally {
-      setIsSending(false);
+      setIsProcessing(false);
     }
   };
 
+  const cancelReset = async () => {
+    if (!requestId || resetStatus !== "active") return;
+    const previousMessage = message;
+    setIsProcessing(true);
+    setResetStatus("cancelled");
+    setMessage("Password reset request cancelled.");
+    setError("");
+    try {
+      const response = await fetch("/api/auth/password-reset", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId }),
+      });
+      const result = await readResetResponse(response);
+      if (result.status === "completed") {
+        setResetStatus("completed");
+        setMessage("Firebase confirmed that this account's password was changed successfully.");
+      }
+    } catch (caughtError) {
+      setResetStatus("active");
+      setMessage(previousMessage);
+      setError(getFirebaseEmailError(caughtError));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (isProcessing) return;
+    if (!nextOpen && resetStatus !== "active") {
+      setMessage("");
+      setError("");
+      setRequestId("");
+      setResetStatus("idle");
+    }
+    onOpenChange(nextOpen);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-md" showCloseButton={!isProcessing}>
         <DialogHeader>
           <DialogTitle>Reset password</DialogTitle>
           <DialogDescription>
@@ -147,14 +235,28 @@ export function PasswordResetDialog({ open, onOpenChange, staff }: PasswordReset
           </DialogDescription>
         </DialogHeader>
 
-        {message && resetStatus === "pending" && (
+        {isProcessing && (
           <Alert>
             <Spinner />
-            <AlertTitle>Waiting for password change</AlertTitle>
+            <AlertTitle>{resetStatus === "cancelled" ? "Cancelling reset" : "Sending reset email"}</AlertTitle>
+            <AlertDescription>Please wait while SmartRoad updates this password reset request.</AlertDescription>
+          </Alert>
+        )}
+        {!isProcessing && message && resetStatus === "active" && (
+          <Alert>
+            <CheckCircle2 />
+            <AlertTitle>Reset email sent</AlertTitle>
             <AlertDescription>{message}</AlertDescription>
           </Alert>
         )}
-        {message && resetStatus === "completed" && (
+        {!isProcessing && message && resetStatus === "cancelled" && (
+          <Alert>
+            <CheckCircle2 />
+            <AlertTitle>Password reset cancelled</AlertTitle>
+            <AlertDescription>{message}</AlertDescription>
+          </Alert>
+        )}
+        {!isProcessing && message && resetStatus === "completed" && (
           <Alert>
             <CheckCircle2 />
             <AlertTitle>Password reset successful</AlertTitle>
@@ -163,7 +265,7 @@ export function PasswordResetDialog({ open, onOpenChange, staff }: PasswordReset
         )}
         {error && (
           <Alert variant="destructive">
-            <AlertTitle>Unable to send reset link</AlertTitle>
+            <AlertTitle>Unable to update password reset</AlertTitle>
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
@@ -175,17 +277,27 @@ export function PasswordResetDialog({ open, onOpenChange, staff }: PasswordReset
         )}
 
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSending}>
+          <Button type="button" variant="outline" onClick={() => handleOpenChange(false)} disabled={isProcessing}>
             Close
           </Button>
-          <Button
-            type="button"
-            onClick={() => void sendReset()}
-            disabled={isSending || isArchived || remainingSeconds > 0}
-          >
-            {isSending ? <Spinner data-icon="inline-start" /> : <KeyRound data-icon="inline-start" />}
-            {remainingSeconds > 0 ? `Resend in ${formatCountdown(remainingSeconds)}` : "Send reset link"}
-          </Button>
+          {resetStatus === "active" ? (
+            <Button type="button" variant="destructive" onClick={() => void cancelReset()} disabled={isProcessing}>
+              {isProcessing && <Spinner data-icon="inline-start" />}
+              Cancel reset
+            </Button>
+          ) : (
+            resetStatus !== "completed" &&
+            !(isProcessing && resetStatus === "cancelled") && (
+              <Button
+                type="button"
+                onClick={() => void sendReset()}
+                disabled={isProcessing || isArchived || remainingSeconds > 0}
+              >
+                {isProcessing ? <Spinner data-icon="inline-start" /> : <KeyRound data-icon="inline-start" />}
+                {remainingSeconds > 0 ? `Resend in ${formatCountdown(remainingSeconds)}` : "Send reset link"}
+              </Button>
+            )
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
