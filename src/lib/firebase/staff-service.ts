@@ -41,6 +41,7 @@ function mapStaffMember(id: string, data: Record<string, unknown>): StaffMember 
     dateJoined: getDateJoined(data.dateJoined, data.createdAt),
     emailVerified: data.emailVerified !== false && legacyStatus !== "pending",
     accountStatus: data.accountStatus === "archived" || legacyStatus === "archived" ? "archived" : "active",
+    archivedAt: timestampToIso(data.archivedAt),
     emailChangeStatus:
       data.emailChangeStatus === "pending" || data.emailChangeStatus === "completed" ? data.emailChangeStatus : "none",
     pendingEmail: getString(data.pendingEmail).toLowerCase() || undefined,
@@ -85,12 +86,12 @@ export function subscribeToStaffMembers(onData: (staff: StaffMember[]) => void, 
     (snapshot) => {
       invitations = snapshot.docs
         .filter((document) => {
-          const data = document.data();
-          const expiresAt = timestampToIso(data.expiresAt);
-          return data.status === "pending" && Boolean(expiresAt && Date.parse(expiresAt) > Date.now());
+          const status = document.data().status;
+          return status === "pending" || status === "expired" || status === "archived";
         })
         .map((document) => {
           const data = document.data();
+          const isArchived = data.status === "archived" || data.accountStatus === "archived";
           return {
             id: `invitation:${document.id}`,
             role: data.role === "Administrator" ? "Administrator" : "Operator",
@@ -98,9 +99,20 @@ export function subscribeToStaffMembers(onData: (staff: StaffMember[]) => void, 
             email: getString(data.email).toLowerCase(),
             dateJoined: timestampToIso(data.createdAt)?.slice(0, 10) || "Pending",
             emailVerified: false,
-            accountStatus: "active",
+            accountStatus: isArchived ? "archived" : "active",
+            archivedAt: timestampToIso(data.archivedAt),
             emailChangeStatus: "none",
             isInvitation: true,
+            invitationStatus: data.status === "expired" ? "expired" : "pending",
+            invitationExpiresAt: timestampToIso(data.expiresAt),
+            verificationSentAt: timestampToIso(data.verificationSentAt) || timestampToIso(data.createdAt),
+            verificationResendAvailableAt: timestampToIso(data.verificationResendAvailableAt),
+            verificationDeliveryStatus:
+              data.verificationDeliveryStatus === "sending" ||
+              data.verificationDeliveryStatus === "sent" ||
+              data.verificationDeliveryStatus === "failed"
+                ? data.verificationDeliveryStatus
+                : undefined,
           } satisfies StaffMember;
         });
       ready.add("invitations");

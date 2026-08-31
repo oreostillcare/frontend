@@ -170,7 +170,7 @@ export function StaffDialog({
               <MailCheck />
               <AlertTitle>Email verification required</AlertTitle>
               <AlertDescription>
-                The verification link expires after 24 hours and can only be used once.
+                The verification link expires after 1 hour and can only be used once.
               </AlertDescription>
             </Alert>
           )}
@@ -183,7 +183,9 @@ export function StaffDialog({
               <AlertDescription>
                 {isCancellingVerification
                   ? "Removing the pending address. The original login email will remain active."
-                  : `Firebase is waiting for ${staffToEdit?.pendingEmail ?? email} to verify the email link. Close this dialog to cancel the request and keep the original email.`}
+                  : `Firebase is waiting for ${
+                      staffToEdit?.pendingEmail ?? email
+                    } to verify the email link. Close this dialog to cancel the request and keep the original email.`}
               </AlertDescription>
             </Alert>
           )}

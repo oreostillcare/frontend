@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { FirebaseError } from "firebase/app";
 import { browserSessionPersistence, setPersistence, signInWithEmailAndPassword } from "firebase/auth";
-import { CheckCircle2, KeyRound } from "lucide-react";
+import { CheckCircle2, Eye, EyeOff, KeyRound } from "lucide-react";
 import { Controller, useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Spinner } from "@/components/ui/spinner";
 import { getFirebaseEmailError, sendNativePasswordReset } from "@/lib/firebase/auth-email";
 import { auth } from "@/lib/firebase/client";
@@ -41,8 +42,8 @@ interface LoginAttemptRecord {
 
 type LoginAttemptStore = Record<string, LoginAttemptRecord>;
 
-const LOGIN_ATTEMPTS_STORAGE_KEY = "smartroad.login-attempts.v1";
-const LOGIN_LOCK_MS = 180_000;
+const LOGIN_ATTEMPTS_STORAGE_KEY = "smartroad.login-attempts.v2";
+const LOGIN_LOCK_MS = 30_000;
 let volatileLoginAttemptStore: LoginAttemptStore = {};
 
 function formatCountdown(seconds: number) {
@@ -136,6 +137,7 @@ export function LoginForm() {
   const [loginLockedEmail, setLoginLockedEmail] = React.useState("");
   const [loginNow, setLoginNow] = React.useState(Date.now());
   const [lastResolvedEmail, setLastResolvedEmail] = React.useState("");
+  const [showPassword, setShowPassword] = React.useState(false);
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -486,18 +488,32 @@ export function LoginForm() {
           render={({ field, fieldState }) => (
             <Field className="gap-1.5" data-invalid={fieldState.invalid}>
               <FieldLabel htmlFor="login-password">Password</FieldLabel>
-              <Input
-                {...field}
-                id="login-password"
-                type="password"
-                placeholder="••••••••"
-                autoComplete="current-password"
-                aria-invalid={fieldState.invalid}
-                disabled={form.formState.isSubmitting}
-              />
+              <InputGroup>
+                <InputGroupInput
+                  {...field}
+                  id="login-password"
+                  type={showPassword ? "text" : "password"}
+                  placeholder="••••••••"
+                  autoComplete="current-password"
+                  aria-invalid={fieldState.invalid}
+                  disabled={form.formState.isSubmitting}
+                />
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    type="button"
+                    size="icon-xs"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showPassword}
+                    onClick={() => setShowPassword((visible) => !visible)}
+                    disabled={form.formState.isSubmitting}
+                  >
+                    {showPassword ? <Eye aria-hidden="true" /> : <EyeOff aria-hidden="true" />}
+                  </InputGroupButton>
+                </InputGroupAddon>
+              </InputGroup>
               {fieldState.invalid && <FieldError errors={[fieldState.error]} />}
               {loginIsLocked && (
-                <p className="text-destructive text-sm" role="alert">
+                <p className="text-destructive text-sm" role="status" aria-live="polite" aria-atomic="true">
                   Too many sign-in attempts. Try again in {remainingLoginCooldown} seconds.
                 </p>
               )}

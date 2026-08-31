@@ -30,6 +30,10 @@ npm run dev
 
 If PowerShell blocks `npm.ps1`, use `npm.cmd ci` and `npm.cmd run dev`. Copy `.env.example` to `.env.local` and configure Firebase plus `NEXT_PUBLIC_BACKEND_URL`. Never commit `.env.local`.
 
+For staff verification emails, set `APP_BASE_URL` to the exact SmartRoad origin and add that hostname to Firebase
+Authentication > Settings > Authorized domains. Production deployments also need a random `CRON_SECRET` (at least
+16 characters) so Vercel can securely run the daily archived-invitation cleanup.
+
 ## Manual Flask backend setup
 
 ```powershell

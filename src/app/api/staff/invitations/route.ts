@@ -1,4 +1,4 @@
-import { Timestamp } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { z } from "zod";
 
 import { adminAuth, adminDb } from "@/lib/firebase/admin";
@@ -8,10 +8,13 @@ import {
   errorResponse,
   expiresInHours,
   findStaffByEmail,
+  getRequestOrigin,
   hashToken,
   normalizeEmail,
   requireAdministrator,
 } from "@/lib/firebase/admin-staff";
+import { sendFirebaseVerificationEmail } from "@/lib/firebase/firebase-verification-email";
+import { cancelPendingInvitation } from "@/lib/firebase/staff-lifecycle";
 
 const invitationSchema = z.object({
   email: z.email(),
@@ -20,6 +23,9 @@ const invitationSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  let invitationRef: FirebaseFirestore.DocumentReference | null = null;
+  let createdUid = "";
+
   try {
     const administrator = await requireAdministrator(request);
     const input = invitationSchema.parse(await request.json());
@@ -31,7 +37,34 @@ export async function POST(request: Request) {
     }
     const pendingEmailOwner = await adminDb.collection("staff").where("pendingEmail", "==", email).limit(1).get();
     if (!pendingEmailOwner.empty) {
-      throw new ApiError("This email is already pending verification for another staff account.", 409, "email-pending");
+      throw new ApiError(
+        "This email is already pending verification for another staff account.",
+        409,
+        "email-pending",
+      );
+    }
+
+    const pendingInvitations = await adminDb
+      .collection("pendingStaffInvitations")
+      .where("normalizedEmail", "==", email)
+      .get();
+    const pendingInvitation = pendingInvitations.docs.find((document) => {
+      const status = document.data().status;
+      return status === "pending" || status === "expired";
+    });
+    if (pendingInvitation) {
+      throw new ApiError(
+        "An invitation already exists for this email. Resend verification from the staff table.",
+        409,
+        "invitation-pending",
+      );
+    }
+    if (pendingInvitations.docs.some((document) => document.data().status === "archived")) {
+      throw new ApiError(
+        "An archived invitation uses this email. Restore it from the Archived tab.",
+        409,
+        "invitation-archived",
+      );
     }
 
     try {
@@ -46,23 +79,20 @@ export async function POST(request: Request) {
       if ((error as { code?: string }).code !== "auth/user-not-found") throw error;
     }
 
-    const pendingInvitations = await adminDb
-      .collection("pendingStaffInvitations")
-      .where("normalizedEmail", "==", email)
-      .get();
-    const hasLiveInvitation = pendingInvitations.docs.some((document) => {
-      const data = document.data();
-      return data.status === "pending" && data.expiresAt instanceof Timestamp && data.expiresAt.toMillis() > Date.now();
-    });
-    if (hasLiveInvitation) {
-      throw new ApiError("A valid invitation is already pending for this email address.", 409, "invitation-pending");
-    }
-
     const token = createOpaqueToken();
-    const tokenHash = hashToken(token);
-    const expiresAt = expiresInHours(24);
-    const invitationRef = adminDb.collection("pendingStaffInvitations").doc(tokenHash);
+    const expiresAt = expiresInHours(1);
+    invitationRef = adminDb.collection("pendingStaffInvitations").doc(hashToken(token));
+    const authUser = await adminAuth.createUser({
+      uid: createOpaqueToken(),
+      email,
+      password: createOpaqueToken(),
+      displayName: input.username,
+      emailVerified: false,
+      disabled: false,
+    });
+    createdUid = authUser.uid;
     await invitationRef.set({
+      authUid: authUser.uid,
       email,
       normalizedEmail: email,
       username: input.username,
@@ -71,16 +101,34 @@ export async function POST(request: Request) {
       createdAt: Timestamp.now(),
       expiresAt,
       invitedBy: administrator.token.uid,
+      verificationDeliveryStatus: "sending",
+      verificationSentAt: Timestamp.now(),
     });
 
+    const continueUrl = new URL("/complete-invitation", getRequestOrigin(request));
+    continueUrl.searchParams.set("token", token);
+    await sendFirebaseVerificationEmail(authUser.uid, email, continueUrl.toString());
+    await invitationRef
+      .update({
+        verificationDeliveryStatus: "sent",
+        verificationSentAt: Timestamp.now(),
+        updatedAt: FieldValue.serverTimestamp(),
+      })
+      .catch((error) => console.error("Invitation sent, but delivery metadata was not updated:", error));
+
     return Response.json({
-      message: `Invitation prepared for ${email}.`,
+      success: true,
+      message: `Firebase sent a verification email to ${email}.`,
       email,
-      verificationToken: token,
-      temporaryPassword: createOpaqueToken(),
       expiresAt: expiresAt.toDate().toISOString(),
     });
   } catch (error) {
+    if (invitationRef || createdUid) {
+      await Promise.all([
+        invitationRef?.delete().catch(() => undefined),
+        createdUid ? adminAuth.deleteUser(createdUid).catch(() => undefined) : Promise.resolve(),
+      ]);
+    }
     if (error instanceof z.ZodError) {
       return Response.json(
         { error: "Enter a valid email, username, and role.", code: "invalid-input" },
@@ -91,36 +139,20 @@ export async function POST(request: Request) {
   }
 }
 
-const cancellationSchema = z.object({ token: z.string().min(20) });
+const cancellationSchema = z.union([
+  z.object({ token: z.string().min(20) }),
+  z.object({ invitationId: z.string().startsWith("invitation:") }),
+]);
 
 export async function DELETE(request: Request) {
   try {
     await requireAdministrator(request);
     const input = cancellationSchema.parse(await request.json());
-    const invitationRef = adminDb.collection("pendingStaffInvitations").doc(hashToken(input.token));
-    const invitation = await invitationRef.get();
-    const data = invitation.data();
-
-    if (invitation.exists && data?.status === "pending") {
-      const email = normalizeEmail(String(data.email || ""));
-      if (email) {
-        const staff = await findStaffByEmail(email);
-        if (!staff) {
-          try {
-            const pendingUser = await adminAuth.getUserByEmail(email);
-            await adminAuth.deleteUser(pendingUser.uid);
-          } catch (error) {
-            if ((error as { code?: string }).code !== "auth/user-not-found") throw error;
-          }
-        }
-      }
-      await invitationRef.delete();
-    }
-
-    return Response.json({ message: "Pending invitation cancelled." });
+    const invitationId = "token" in input ? `invitation:${hashToken(input.token)}` : input.invitationId;
+    return Response.json(await cancelPendingInvitation(invitationId));
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return Response.json({ error: "Invitation token is invalid.", code: "invalid-token" }, { status: 400 });
+      return Response.json({ error: "Pending invitation is invalid.", code: "invalid-invitation" }, { status: 400 });
     }
     return errorResponse(error);
   }

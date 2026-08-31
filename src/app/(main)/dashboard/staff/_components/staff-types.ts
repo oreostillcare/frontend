@@ -10,11 +10,17 @@ export interface StaffMember {
   dateJoined: string;
   emailVerified: boolean;
   accountStatus: "active" | "archived";
+  archivedAt?: string;
   emailChangeStatus: "none" | "pending" | "completed";
   pendingEmail?: string;
   previousEmail?: string;
   emailChangeCompletedAt?: string;
   isInvitation?: boolean;
+  invitationStatus?: "pending" | "expired";
+  invitationExpiresAt?: string;
+  verificationSentAt?: string;
+  verificationResendAvailableAt?: string;
+  verificationDeliveryStatus?: "sending" | "sent" | "failed";
   passwordResetStatus?: "idle" | "pending" | "completed" | "failed";
   passwordResetRequestedAt?: string;
   passwordResetCompletedAt?: string;

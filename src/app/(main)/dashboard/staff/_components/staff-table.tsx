@@ -2,7 +2,21 @@
 
 import * as React from "react";
 
-import { Archive, ArrowUpDown, KeyRound, Plus, RotateCcw, SquarePen } from "lucide-react";
+import {
+  Archive,
+  ArrowUpDown,
+  CheckCircle2,
+  CircleX,
+  Clock3,
+  KeyRound,
+  type LucideIcon,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  SquarePen,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { PasswordResetDialog } from "@/components/password-reset-dialog";
@@ -10,17 +24,22 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useFirebaseAccount } from "@/hooks/use-firebase-account";
 import { createPendingVerifiedAccount } from "@/lib/firebase/auth-email";
 import { staffApi } from "@/lib/firebase/staff-api";
 import { subscribeToStaffMembers } from "@/lib/firebase/staff-service";
+import { cn } from "@/lib/utils";
 
-import { ArchiveStaffDialog } from "./delete-staff-dialog";
+import { ArchiveStaffDialog, CancelInvitationDialog, RestoreStaffDialog } from "./delete-staff-dialog";
 import { StaffDialog } from "./staff-dialog";
 import type { StaffFormData, StaffMember, StaffSaveResult } from "./staff-types";
 
 type SortField = "role" | "username" | "email" | "accountStatus" | "dateJoined";
+type StatusFilter = "active" | "archived" | "all";
 
 interface PendingEmailVerification {
   message: string;
@@ -28,6 +47,20 @@ interface PendingEmailVerification {
   verificationToken: string;
   temporaryPassword: string;
   expiresAt: string;
+}
+
+interface InvitationCreatedResponse {
+  success: boolean;
+  message: string;
+  email: string;
+  expiresAt: string;
+}
+
+interface ResendVerificationResponse {
+  success: boolean;
+  message: string;
+  expiresAt: string;
+  cooldownEndsAt: string;
 }
 
 interface CancelEmailVerificationResponse {
@@ -41,10 +74,81 @@ function verificationUrl(pathname: string, token: string) {
   return url.toString();
 }
 
-function getAccountStatus(staff: StaffMember) {
-  if (staff.accountStatus === "archived") return "Verified Archived";
-  if (!staff.emailVerified) return "Pending Verification";
-  return "Verified Active";
+const DAY_MS = 24 * 60 * 60 * 1000;
+const ARCHIVE_RETENTION_MS = 6 * DAY_MS;
+
+interface StaffStatus {
+  label: string;
+  icon: LucideIcon;
+  variant: React.ComponentProps<typeof Badge>["variant"];
+}
+
+function timestampMillis(value?: string) {
+  if (!value) return 0;
+  const milliseconds = Date.parse(value);
+  return Number.isNaN(milliseconds) ? 0 : milliseconds;
+}
+
+function formatCountdown(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
+function invitationExpiryMillis(staff: StaffMember) {
+  if (staff.invitationStatus === "expired") return 0;
+  const storedExpiry = timestampMillis(staff.invitationExpiresAt);
+  const sentAt = timestampMillis(staff.verificationSentAt);
+  const oneHourExpiry = sentAt ? sentAt + 60 * 60 * 1000 : 0;
+  if (storedExpiry && oneHourExpiry) return Math.min(storedExpiry, oneHourExpiry);
+  return storedExpiry || oneHourExpiry;
+}
+
+function archivedUnverifiedStatus(staff: StaffMember, now: number): StaffStatus {
+  const archivedAt = timestampMillis(staff.archivedAt);
+  const remaining = archivedAt ? archivedAt + ARCHIVE_RETENTION_MS - now : 0;
+  if (remaining <= 0) return { label: "Archived · deletion pending", icon: TriangleAlert, variant: "destructive" };
+
+  const days = Math.ceil(remaining / DAY_MS);
+  if (days === 1) return { label: "Archived · deletes tomorrow", icon: TriangleAlert, variant: "destructive" };
+  return {
+    label: `Archived · deletes in ${days} days`,
+    icon: days <= 3 ? TriangleAlert : Archive,
+    variant: days <= 3 ? "destructive" : "outline",
+  };
+}
+
+function getAccountStatus(staff: StaffMember, now: number): StaffStatus {
+  if (staff.accountStatus === "archived") {
+    if (!staff.emailVerified) return archivedUnverifiedStatus(staff, now);
+    return { label: "Archived", icon: Archive, variant: "outline" };
+  }
+  if (staff.isInvitation || !staff.emailVerified) {
+    const remaining = invitationExpiryMillis(staff) - now;
+    if (remaining <= 0) return { label: "Verification expired", icon: CircleX, variant: "destructive" };
+    return { label: `${formatCountdown(remaining)} remaining`, icon: Clock3, variant: "outline" };
+  }
+  return { label: "Verified Active", icon: CheckCircle2, variant: "secondary" };
+}
+
+interface ActionIconButtonProps extends Omit<React.ComponentProps<typeof Button>, "children"> {
+  label: string;
+  children: React.ReactNode;
+}
+
+function ActionIconButton({ label, children, ...buttonProps }: ActionIconButtonProps) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label={label} {...buttonProps}>
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">{label}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 export function StaffTable() {
@@ -55,12 +159,21 @@ export function StaffTable() {
   const [sortField, setSortField] = React.useState<SortField>("dateJoined");
   const [sortDirection, setSortDirection] = React.useState<"asc" | "desc">("desc");
   const [currentPage, setCurrentPage] = React.useState(1);
+  const [statusFilter, setStatusFilter] = React.useState<StatusFilter>("active");
+  const [now, setNow] = React.useState(() => Date.now());
+  const [resendingEmail, setResendingEmail] = React.useState<string | null>(null);
+
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [editingStaff, setEditingStaff] = React.useState<StaffMember | null>(null);
   const [archiveDialogOpen, setArchiveDialogOpen] = React.useState(false);
   const [staffToArchive, setStaffToArchive] = React.useState<StaffMember | null>(null);
+  const [restoreDialogOpen, setRestoreDialogOpen] = React.useState(false);
+  const [staffToRestore, setStaffToRestore] = React.useState<StaffMember | null>(null);
+  const [cancelDialogOpen, setCancelDialogOpen] = React.useState(false);
+  const [invitationToCancel, setInvitationToCancel] = React.useState<StaffMember | null>(null);
   const [resetDialogOpen, setResetDialogOpen] = React.useState(false);
   const [staffToReset, setStaffToReset] = React.useState<StaffMember | null>(null);
+
   const pageSize = 5;
   const isAdmin = staffRole === "Administrator";
 
@@ -79,6 +192,14 @@ export function StaffTable() {
       ),
     [],
   );
+
+  const hasInvitationRows = staffList.some((staff) => staff.isInvitation);
+  React.useEffect(() => {
+    if (!hasInvitationRows) return;
+    setNow(Date.now());
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [hasInvitationRows]);
 
   const pendingCredentialKey = staffList
     .filter(
@@ -136,8 +257,13 @@ export function StaffTable() {
   const filteredStaff = React.useMemo(() => {
     const search = searchQuery.toLowerCase().trim();
     return staffList
+      .filter((staff) => {
+        if (statusFilter === "active") return staff.accountStatus !== "archived";
+        if (statusFilter === "archived") return staff.accountStatus === "archived";
+        return true;
+      })
       .filter((staff) =>
-        [staff.role, staff.username, staff.email, staff.pendingEmail || "", getAccountStatus(staff)]
+        [staff.role, staff.username, staff.email, staff.pendingEmail || "", getAccountStatus(staff, now).label]
           .join(" ")
           .toLowerCase()
           .includes(search),
@@ -146,7 +272,7 @@ export function StaffTable() {
         const comparison = String(left[sortField] || "").localeCompare(String(right[sortField] || ""));
         return sortDirection === "asc" ? comparison : -comparison;
       });
-  }, [searchQuery, sortDirection, sortField, staffList]);
+  }, [now, searchQuery, sortDirection, sortField, staffList, statusFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredStaff.length / pageSize));
   const paginatedStaff = filteredStaff.slice((currentPage - 1) * pageSize, currentPage * pageSize);
@@ -155,28 +281,19 @@ export function StaffTable() {
     setCurrentPage((page) => Math.min(page, totalPages));
   }, [totalPages]);
 
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [statusFilter]);
+
   const handleSaveStaff = async (formData: StaffFormData): Promise<StaffSaveResult> => {
     if (!isAdmin) return "saved";
 
     if (!editingStaff) {
-      const result = await staffApi<PendingEmailVerification>("/api/staff/invitations", {
+      const result = await staffApi<InvitationCreatedResponse>("/api/staff/invitations", {
         method: "POST",
         body: JSON.stringify(formData),
       });
-      try {
-        await createPendingVerifiedAccount(
-          result.email,
-          result.temporaryPassword,
-          verificationUrl("/complete-invitation", result.verificationToken),
-        );
-      } catch (error) {
-        await staffApi("/api/staff/invitations", {
-          method: "DELETE",
-          body: JSON.stringify({ token: result.verificationToken }),
-        }).catch(() => undefined);
-        throw error;
-      }
-      toast.success(`Firebase sent a verification email to ${result.email}.`);
+      toast.success(result.message);
       return "saved";
     }
 
@@ -219,24 +336,63 @@ export function StaffTable() {
       : "A staff account already uses this email address.";
   };
 
+  const actionErrorMessage = (error: unknown, fallback: string) => (error instanceof Error ? error.message : fallback);
+
   const handleArchiveConfirm = async () => {
     if (!isAdmin || !staffToArchive) return;
-    const result = await staffApi<{ message: string }>(`/api/staff/${encodeURIComponent(staffToArchive.id)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ action: "archive" }),
-    });
-    toast.success(result.message);
-  };
-
-  const handleReactivate = async (staff: StaffMember) => {
     try {
-      const result = await staffApi<{ message: string }>(`/api/staff/${encodeURIComponent(staff.id)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ action: "reactivate" }),
+      const result = await staffApi<{ message: string }>("/api/staff/archive", {
+        method: "POST",
+        body: JSON.stringify({ staffId: staffToArchive.id }),
       });
       toast.success(result.message);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Unable to reactivate this account.");
+      toast.error(actionErrorMessage(error, "Unable to archive this account."));
+      throw error;
+    }
+  };
+
+  const handleRestoreConfirm = async () => {
+    if (!isAdmin || !staffToRestore) return;
+    try {
+      const result = await staffApi<{ message: string }>("/api/staff/restore", {
+        method: "POST",
+        body: JSON.stringify({ staffId: staffToRestore.id }),
+      });
+      toast.success(result.message);
+    } catch (error) {
+      toast.error(actionErrorMessage(error, "Unable to restore this account."));
+      throw error;
+    }
+  };
+
+  const handleResendVerification = async (staff: StaffMember) => {
+    if (!isAdmin || resendingEmail) return;
+    try {
+      setResendingEmail(staff.email);
+      const result = await staffApi<ResendVerificationResponse>("/api/staff/resend-verification", {
+        method: "POST",
+        body: JSON.stringify({ email: staff.email }),
+      });
+      toast.success(result.message);
+    } catch (error) {
+      toast.error(actionErrorMessage(error, "Unable to resend the verification email."));
+    } finally {
+      setResendingEmail(null);
+    }
+  };
+
+  const handleCancelInvitation = async () => {
+    if (!isAdmin || !invitationToCancel) return;
+    try {
+      const result = await staffApi<{ message: string }>("/api/staff/invitations", {
+        method: "DELETE",
+        body: JSON.stringify({ invitationId: invitationToCancel.id }),
+      });
+      toast.success(result.message);
+    } catch (error) {
+      toast.error(actionErrorMessage(error, "Unable to cancel this invitation."));
+      throw error;
     }
   };
 
@@ -253,6 +409,12 @@ export function StaffTable() {
     ? (staffList.find((staff) => staff.id === editingStaff.id) ?? editingStaff)
     : null;
 
+  const filterTabs: { key: StatusFilter; label: string }[] = [
+    { key: "active", label: "Active" },
+    { key: "archived", label: "Archived" },
+    { key: "all", label: "All" },
+  ];
+
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-1">
@@ -265,8 +427,26 @@ export function StaffTable() {
       <Card className="rounded-xl border shadow-xs">
         <CardContent className="p-4 md:p-6">
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              {isAdmin && (
+            <div className="flex flex-wrap items-center gap-2">
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                size="sm"
+                spacing={0}
+                value={statusFilter}
+                onValueChange={(value) => {
+                  if (value) setStatusFilter(value as StatusFilter);
+                }}
+                aria-label="Filter staff by account status"
+              >
+                {filterTabs.map((tab) => (
+                  <ToggleGroupItem key={tab.key} value={tab.key} aria-label={`Show ${tab.label.toLowerCase()} staff`}>
+                    {tab.label}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+
+              {isAdmin && statusFilter !== "archived" && (
                 <Button
                   onClick={() => {
                     setEditingStaff(null);
@@ -279,6 +459,7 @@ export function StaffTable() {
                 </Button>
               )}
             </div>
+
             <div className="flex items-center gap-2">
               <label htmlFor="staff-search-input" className="font-medium text-foreground text-sm">
                 Search:
@@ -321,6 +502,7 @@ export function StaffTable() {
                   {isAdmin && <TableHead className="text-right font-semibold text-foreground">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
+
               <TableBody>
                 {isLoading && (
                   <TableRow>
@@ -332,18 +514,35 @@ export function StaffTable() {
                 {!isLoading && paginatedStaff.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={6} className="h-32 text-center text-muted-foreground text-sm">
-                      No staff records found matching your search.
+                      {statusFilter === "archived"
+                        ? "No archived staff accounts."
+                        : "No staff records found matching your search."}
                     </TableCell>
                   </TableRow>
                 )}
                 {!isLoading &&
                   paginatedStaff.length > 0 &&
                   paginatedStaff.map((staff) => {
-                    const status = getAccountStatus(staff);
+                    const status = getAccountStatus(staff, now);
+                    const StatusIcon = status.icon;
+                    const isArchived = staff.accountStatus === "archived";
+                    const isInvitationExpired =
+                      Boolean(staff.isInvitation) && invitationExpiryMillis(staff) <= now;
+                    const isActiveInvitation = Boolean(staff.isInvitation) && !isArchived && !isInvitationExpired;
+                    const isExpiredInvitation = Boolean(staff.isInvitation) && !isArchived && isInvitationExpired;
+                    const isResending = resendingEmail === staff.email;
+                    const isVerificationSending =
+                      isResending ||
+                      (staff.verificationDeliveryStatus === "sending" &&
+                        !isInvitationExpired &&
+                        now - timestampMillis(staff.verificationSentAt) < 30_000);
+                    const resendCooldownRemaining = timestampMillis(staff.verificationResendAvailableAt) - now;
+                    const isResendCoolingDown = resendCooldownRemaining > 0;
                     const isOwnAccount =
                       staff.uid === user?.uid || staff.authUid === user?.uid || staff.email === user?.email;
+
                     return (
-                      <TableRow key={staff.id} className="hover:bg-muted/40">
+                      <TableRow key={staff.id} className={cn("hover:bg-muted/40", isArchived && "opacity-70")}>
                         <TableCell>
                           <Badge variant={staff.role === "Administrator" ? "default" : "outline"}>{staff.role}</Badge>
                         </TableCell>
@@ -352,67 +551,109 @@ export function StaffTable() {
                           <span className="block truncate">{staff.email}</span>
                         </TableCell>
                         <TableCell>
-                          <Badge variant={status === "Verified Active" ? "secondary" : "outline"}>{status}</Badge>
+                          <Badge variant={status.variant}>
+                            <StatusIcon />
+                            {status.label}
+                          </Badge>
                         </TableCell>
                         <TableCell className="whitespace-nowrap text-muted-foreground">{staff.dateJoined}</TableCell>
+
                         {isAdmin && (
                           <TableCell className="text-right">
                             <div className="flex items-center justify-end gap-1">
-                              {staff.isInvitation && (
-                                <span className="px-2 text-muted-foreground text-xs">Awaiting verification</span>
-                              )}
-                              {!staff.isInvitation && staff.accountStatus === "archived" && (
-                                <Button
-                                  variant="ghost"
-                                  size="icon-sm"
-                                  onClick={() => void handleReactivate(staff)}
-                                  title="Reactivate staff account"
+                              {isArchived && (
+                                <ActionIconButton
+                                  label={`Restore ${staff.username}`}
+                                  onClick={() => {
+                                    setStaffToRestore(staff);
+                                    setRestoreDialogOpen(true);
+                                  }}
                                 >
                                   <RotateCcw />
-                                  <span className="sr-only">Reactivate {staff.username}</span>
-                                </Button>
+                                </ActionIconButton>
                               )}
-                              {!staff.isInvitation && staff.accountStatus !== "archived" && (
+
+                              {isActiveInvitation && isVerificationSending && (
+                                <ActionIconButton label="Sending verification email" disabled>
+                                  <Spinner />
+                                </ActionIconButton>
+                              )}
+
+                              {isActiveInvitation && !isVerificationSending && (
+                                <ActionIconButton
+                                  label={`Cancel invitation for ${staff.username}`}
+                                  onClick={() => {
+                                    setInvitationToCancel(staff);
+                                    setCancelDialogOpen(true);
+                                  }}
+                                >
+                                  <X />
+                                </ActionIconButton>
+                              )}
+
+                              {isExpiredInvitation && (
+                                <ActionIconButton
+                                  label={
+                                    isResending
+                                      ? "Resending verification email"
+                                      : isResendCoolingDown
+                                        ? `Resend available in ${formatCountdown(resendCooldownRemaining)}`
+                                        : `Resend verification to ${staff.email}`
+                                  }
+                                  onClick={() => void handleResendVerification(staff)}
+                                  disabled={Boolean(resendingEmail) || isResendCoolingDown}
+                                >
+                                  {isResending ? <Spinner /> : <RefreshCw />}
+                                </ActionIconButton>
+                              )}
+
+                              {staff.isInvitation && !isArchived && (
+                                <ActionIconButton
+                                  label={`Archive ${staff.username}`}
+                                  onClick={() => {
+                                    setStaffToArchive(staff);
+                                    setArchiveDialogOpen(true);
+                                  }}
+                                  disabled={isVerificationSending}
+                                >
+                                  <Archive />
+                                </ActionIconButton>
+                              )}
+
+                              {!staff.isInvitation && !isArchived && (
                                 <>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon-sm"
+                                  <ActionIconButton
+                                    label={`Reset password for ${staff.username}`}
                                     onClick={() => {
                                       setStaffToReset(staff);
                                       setResetDialogOpen(true);
                                     }}
-                                    title="Reset password"
                                   >
                                     <KeyRound />
-                                    <span className="sr-only">Reset password for {staff.username}</span>
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon-sm"
+                                  </ActionIconButton>
+                                  <ActionIconButton
+                                    label={`Edit ${staff.username}`}
                                     onClick={() => {
                                       setEditingStaff(staff);
                                       setDialogOpen(true);
                                     }}
-                                    title="Edit staff member"
                                   >
                                     <SquarePen />
-                                    <span className="sr-only">Edit {staff.username}</span>
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon-sm"
+                                  </ActionIconButton>
+                                  <ActionIconButton
+                                    label={
+                                      isOwnAccount
+                                        ? "You cannot archive your own account"
+                                        : `Archive ${staff.username}`
+                                    }
                                     onClick={() => {
                                       setStaffToArchive(staff);
                                       setArchiveDialogOpen(true);
                                     }}
                                     disabled={isOwnAccount}
-                                    title={
-                                      isOwnAccount ? "You cannot archive your own account" : "Archive staff member"
-                                    }
                                   >
                                     <Archive />
-                                    <span className="sr-only">Archive {staff.username}</span>
-                                  </Button>
+                                  </ActionIconButton>
                                 </>
                               )}
                             </div>
@@ -474,6 +715,18 @@ export function StaffTable() {
             onOpenChange={setArchiveDialogOpen}
             staff={staffToArchive}
             onConfirmArchive={handleArchiveConfirm}
+          />
+          <RestoreStaffDialog
+            open={restoreDialogOpen}
+            onOpenChange={setRestoreDialogOpen}
+            staff={staffToRestore}
+            onConfirmRestore={handleRestoreConfirm}
+          />
+          <CancelInvitationDialog
+            open={cancelDialogOpen}
+            onOpenChange={setCancelDialogOpen}
+            staff={invitationToCancel}
+            onConfirmCancel={handleCancelInvitation}
           />
           <PasswordResetDialog open={resetDialogOpen} onOpenChange={setResetDialogOpen} staff={staffToReset} />
         </>

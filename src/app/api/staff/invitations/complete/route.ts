@@ -1,9 +1,9 @@
 import type { UserRecord } from "firebase-admin/auth";
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import { FieldValue } from "firebase-admin/firestore";
 import { z } from "zod";
 
 import { adminAuth, adminDb } from "@/lib/firebase/admin";
-import { ApiError, errorResponse, hashToken } from "@/lib/firebase/admin-staff";
+import { ApiError, errorResponse, getStaffInvitationExpirationMillis, hashToken } from "@/lib/firebase/admin-staff";
 
 const completionSchema = z.object({
   token: z.string().min(20),
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
       if (!snapshot.exists || !data) throw new ApiError("This invitation link is invalid.", 404, "invalid-token");
       if (data.status !== "pending")
         throw new ApiError("This invitation link has already been used.", 410, "used-token");
-      if (!(data.expiresAt instanceof Timestamp) || data.expiresAt.toMillis() <= Date.now()) {
+      if (getStaffInvitationExpirationMillis(data) <= Date.now()) {
         transaction.update(invitationDocumentRef, { status: "expired", updatedAt: FieldValue.serverTimestamp() });
         throw new ApiError("This invitation link has expired.", 410, "expired-token");
       }
@@ -34,7 +34,10 @@ export async function POST(request: Request) {
 
     let authUser: UserRecord;
     try {
-      authUser = await adminAuth.getUserByEmail(String(invitation.email));
+      authUser =
+        typeof invitation.authUid === "string" && invitation.authUid
+          ? await adminAuth.getUser(invitation.authUid)
+          : await adminAuth.getUserByEmail(String(invitation.email));
     } catch (error) {
       if ((error as { code?: string }).code === "auth/user-not-found") {
         throw new ApiError(
@@ -44,6 +47,9 @@ export async function POST(request: Request) {
         );
       }
       throw error;
+    }
+    if (authUser.email?.trim().toLowerCase() !== String(invitation.normalizedEmail || invitation.email).toLowerCase()) {
+      throw new ApiError("The Firebase account does not match this invitation.", 409, "auth-user-mismatch");
     }
     if (!authUser.emailVerified) {
       throw new ApiError(

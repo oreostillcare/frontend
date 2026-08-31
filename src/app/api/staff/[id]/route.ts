@@ -1,14 +1,13 @@
 import { FieldValue } from "firebase-admin/firestore";
 import { z } from "zod";
 
-import { adminAuth } from "@/lib/firebase/admin";
 import {
   ApiError,
   errorResponse,
   findStaffDocument,
-  getStaffAuthUid,
   requireAdministrator,
 } from "@/lib/firebase/admin-staff";
+import { archiveStaffMember, restoreStaffMember } from "@/lib/firebase/staff-lifecycle";
 
 const updateSchema = z.discriminatedUnion("action", [
   z.object({
@@ -38,32 +37,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return Response.json({ message: "Staff profile updated." });
     }
 
-    const targetUid = await getStaffAuthUid(staffDocument);
-    if (input.action === "archive" && targetUid === administrator.token.uid) {
-      throw new ApiError("You cannot archive your own administrator account.", 409, "cannot-archive-self");
-    }
-
-    const shouldDisable = input.action === "archive";
-    await adminAuth.updateUser(targetUid, { disabled: shouldDisable });
-    try {
-      await staffDocument.ref.update({
-        uid: targetUid,
-        authUid: targetUid,
-        accountStatus: shouldDisable ? "archived" : "active",
-        emailVerified: true,
-        ...(shouldDisable
-          ? { archivedAt: FieldValue.serverTimestamp(), archivedBy: administrator.token.uid }
-          : { archivedAt: FieldValue.delete(), reactivatedAt: FieldValue.serverTimestamp() }),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-    } catch (error) {
-      await adminAuth.updateUser(targetUid, { disabled: !shouldDisable }).catch(() => undefined);
-      throw error;
-    }
-
-    return Response.json({
-      message: shouldDisable ? "Staff account archived. Dashboard access is disabled." : "Staff account reactivated.",
-    });
+    return Response.json(
+      input.action === "archive"
+        ? await archiveStaffMember(staffDocument.id, administrator.token.uid)
+        : await restoreStaffMember(staffDocument.id),
+    );
   } catch (error) {
     if (error instanceof z.ZodError) {
       return Response.json({ error: "Enter a valid staff action.", code: "invalid-input" }, { status: 400 });

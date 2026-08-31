@@ -153,6 +153,19 @@ export function expiresInHours(hours: number) {
   return Timestamp.fromMillis(Date.now() + hours * 60 * 60 * 1000);
 }
 
+export function getStaffInvitationExpirationMillis(data: Record<string, unknown>) {
+  const storedExpiry = data.expiresAt instanceof Timestamp ? data.expiresAt.toMillis() : 0;
+  const sentAt =
+    data.verificationSentAt instanceof Timestamp
+      ? data.verificationSentAt.toMillis()
+      : data.createdAt instanceof Timestamp
+        ? data.createdAt.toMillis()
+        : 0;
+  const oneHourExpiry = sentAt ? sentAt + 60 * 60 * 1000 : 0;
+  if (storedExpiry && oneHourExpiry) return Math.min(storedExpiry, oneHourExpiry);
+  return storedExpiry || oneHourExpiry;
+}
+
 export function errorResponse(error: unknown) {
   if (error instanceof ApiError) {
     return Response.json({ error: error.message, code: error.code }, { status: error.status });

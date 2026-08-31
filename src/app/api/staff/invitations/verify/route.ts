@@ -1,7 +1,5 @@
-import { Timestamp } from "firebase-admin/firestore";
-
 import { adminDb } from "@/lib/firebase/admin";
-import { ApiError, errorResponse, hashToken } from "@/lib/firebase/admin-staff";
+import { ApiError, errorResponse, getStaffInvitationExpirationMillis, hashToken } from "@/lib/firebase/admin-staff";
 
 export async function GET(request: Request) {
   try {
@@ -11,8 +9,10 @@ export async function GET(request: Request) {
     const invitation = await adminDb.collection("pendingStaffInvitations").doc(hashToken(token)).get();
     const data = invitation.data();
     if (!invitation.exists || !data) throw new ApiError("This invitation link is invalid.", 404, "invalid-token");
-    if (data.status !== "pending") throw new ApiError("This invitation link has already been used.", 410, "used-token");
-    if (!(data.expiresAt instanceof Timestamp) || data.expiresAt.toMillis() <= Date.now()) {
+    if (data.status !== "pending") {
+      throw new ApiError("This invitation link has already been used.", 410, "used-token");
+    }
+    if (getStaffInvitationExpirationMillis(data) <= Date.now()) {
       throw new ApiError("This invitation link has expired.", 410, "expired-token");
     }
 
