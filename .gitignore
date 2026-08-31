@@ -1,8 +1,6 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
-/node_modules
-/.pnp
+/node_modules/
+.pnp
 .pnp.js
 .yarn/install-state.gz
 
@@ -29,30 +27,39 @@ yarn-debug.log*
 yarn-error.log*
 *.log
 
-# local env files
-.env*.local
+# local env files / secrets
 .env
+.env*.local
+/backend/.env
 
 # local traffic-system artifacts
-/backend/.env
 /backend/datasets/*
 !/backend/datasets/.gitkeep
+
 /backend/media/*
 !/backend/media/.gitkeep
+
+/backend/runs/
+
+# models
 /backend/models/*
 !/backend/models/.gitkeep
 !/backend/models/best.pt
-/backend/runs/
+
 /backend/*.pt
 /backend/*.onnx
 /backend/*.engine
-*.zip
+
+# python
 __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# archives
+*.zip
 
 # vercel
 .vercel
