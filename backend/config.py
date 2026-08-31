@@ -6,7 +6,8 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent
 # This is a local appliance-style service: the project .env is its source of
 # truth. Override stale variables inherited from a long-lived VS Code terminal.
-load_dotenv(BASE_DIR / ".env", override=True)
+backend_env = BASE_DIR / ".env"
+load_dotenv(backend_env if backend_env.exists() else BASE_DIR.parent / ".env", override=True)
 
 def env_bool(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
