@@ -1,4 +1,4 @@
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import { FieldValue } from "firebase-admin/firestore";
 import { z } from "zod";
 
 import { adminAuth, adminDb } from "@/lib/firebase/admin";
@@ -37,11 +37,7 @@ export async function POST(request: Request) {
     }
     const pendingEmailOwner = await adminDb.collection("staff").where("pendingEmail", "==", email).limit(1).get();
     if (!pendingEmailOwner.empty) {
-      throw new ApiError(
-        "This email is already pending verification for another staff account.",
-        409,
-        "email-pending",
-      );
+      throw new ApiError("This email is already pending verification for another staff account.", 409, "email-pending");
     }
 
     const pendingInvitations = await adminDb
@@ -80,55 +76,51 @@ export async function POST(request: Request) {
     }
 
     const token = createOpaqueToken();
+    const tokenHash = hashToken(token);
     const expiresAt = expiresInHours(1);
-    invitationRef = adminDb.collection("pendingStaffInvitations").doc(hashToken(token));
+    const temporaryPassword = createOpaqueToken();
     const authUser = await adminAuth.createUser({
-      uid: createOpaqueToken(),
       email,
-      password: createOpaqueToken(),
+      password: temporaryPassword,
       displayName: input.username,
       emailVerified: false,
       disabled: false,
     });
     createdUid = authUser.uid;
+    invitationRef = adminDb.collection("pendingStaffInvitations").doc(tokenHash);
     await invitationRef.set({
       authUid: authUser.uid,
       email,
       normalizedEmail: email,
       username: input.username,
       role: input.role,
+      tokenHash,
       status: "pending",
-      createdAt: Timestamp.now(),
+      createdAt: FieldValue.serverTimestamp(),
       expiresAt,
       invitedBy: administrator.token.uid,
-      verificationDeliveryStatus: "sending",
-      verificationSentAt: Timestamp.now(),
     });
 
-    const continueUrl = new URL("/complete-invitation", getRequestOrigin(request));
-    continueUrl.searchParams.set("token", token);
-    await sendFirebaseVerificationEmail(authUser.uid, email, continueUrl.toString());
-    await invitationRef
-      .update({
-        verificationDeliveryStatus: "sent",
-        verificationSentAt: Timestamp.now(),
-        updatedAt: FieldValue.serverTimestamp(),
-      })
-      .catch((error) => console.error("Invitation sent, but delivery metadata was not updated:", error));
+    const invitationUrl = new URL("/complete-invitation", getRequestOrigin(request));
+    invitationUrl.searchParams.set("token", token);
+    await sendFirebaseVerificationEmail(email, temporaryPassword, invitationUrl.toString());
+    await invitationRef.update({
+      verificationDeliveryStatus: "sent",
+      verificationSentAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
 
     return Response.json({
       success: true,
-      message: `Firebase sent a verification email to ${email}.`,
+      message: `Invitation email sent to ${email}.`,
       email,
       expiresAt: expiresAt.toDate().toISOString(),
     });
   } catch (error) {
-    if (invitationRef || createdUid) {
-      await Promise.all([
-        invitationRef?.delete().catch(() => undefined),
-        createdUid ? adminAuth.deleteUser(createdUid).catch(() => undefined) : Promise.resolve(),
-      ]);
-    }
+    await Promise.all([
+      invitationRef?.delete().catch(() => undefined),
+      createdUid ? adminAuth.deleteUser(createdUid).catch(() => undefined) : Promise.resolve(),
+    ]);
     if (error instanceof z.ZodError) {
       return Response.json(
         { error: "Enter a valid email, username, and role.", code: "invalid-input" },

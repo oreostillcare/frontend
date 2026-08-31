@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { CheckCircle2 } from "lucide-react";
 
@@ -19,7 +20,17 @@ interface InvitationDetails {
   role: "Administrator" | "Operator";
 }
 
+async function invitationDetails(token: string) {
+  const response = await fetch(`/api/staff/invitations/verify?token=${encodeURIComponent(token)}`, {
+    cache: "no-store",
+  });
+  const payload = (await response.json()) as InvitationDetails & { error?: string };
+  if (!response.ok) throw new Error(payload.error ?? "Unable to verify this invitation.");
+  return payload;
+}
+
 export function CompleteInvitationForm({ token }: { token: string }) {
+  const router = useRouter();
   const [details, setDetails] = React.useState<InvitationDetails | null>(null);
   const [password, setPassword] = React.useState("");
   const [confirmation, setConfirmation] = React.useState("");
@@ -34,20 +45,23 @@ export function CompleteInvitationForm({ token }: { token: string }) {
       setIsLoading(false);
       return;
     }
-    void fetch(`/api/staff/invitations/verify?token=${encodeURIComponent(token)}`)
-      .then(async (response) => {
-        const payload = (await response.json()) as InvitationDetails & { error?: string };
-        if (!response.ok) throw new Error(payload.error ?? "Unable to verify this invitation.");
-        setDetails(payload);
-      })
+    void invitationDetails(token)
+      .then(setDetails)
       .catch((caughtError: unknown) => {
         setError(caughtError instanceof Error ? caughtError.message : "Unable to verify this invitation.");
       })
       .finally(() => setIsLoading(false));
   }, [token]);
 
+  React.useEffect(() => {
+    if (!message) return;
+    const timeout = window.setTimeout(() => router.replace("/login?invitation=completed"), 1500);
+    return () => window.clearTimeout(timeout);
+  }, [message, router]);
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!details) return;
     if (password.length < 8) {
       setError("Use a password with at least 8 characters.");
       return;
@@ -60,6 +74,7 @@ export function CompleteInvitationForm({ token }: { token: string }) {
     try {
       setIsSaving(true);
       setError("");
+      await invitationDetails(token);
       const response = await fetch("/api/staff/invitations/complete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -82,8 +97,8 @@ export function CompleteInvitationForm({ token }: { token: string }) {
     <main className="flex min-h-screen items-center justify-center bg-muted/30 p-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>Complete your SmartRoad account</CardTitle>
-          <CardDescription>Verify the invitation details and create your login password.</CardDescription>
+          <CardTitle>Create Your Password</CardTitle>
+          <CardDescription>Choose your login password and activate your SmartRoad staff account.</CardDescription>
         </CardHeader>
         <CardContent>
           {isLoading && (
@@ -95,8 +110,8 @@ export function CompleteInvitationForm({ token }: { token: string }) {
             <div className="flex flex-col gap-4">
               <Alert>
                 <CheckCircle2 />
-                <AlertTitle>Account created</AlertTitle>
-                <AlertDescription>{message}</AlertDescription>
+                <AlertTitle>Verified and active</AlertTitle>
+                <AlertDescription>{message} Redirecting to login...</AlertDescription>
               </Alert>
               <Button asChild>
                 <Link href="/login">Continue to login</Link>
@@ -104,7 +119,7 @@ export function CompleteInvitationForm({ token }: { token: string }) {
             </div>
           )}
           {!isLoading && !message && (
-            <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+            <div className="flex flex-col gap-4">
               {error && (
                 <Alert variant="destructive">
                   <AlertTitle>Unable to continue</AlertTitle>
@@ -118,39 +133,41 @@ export function CompleteInvitationForm({ token }: { token: string }) {
                     <p className="text-muted-foreground">{details.email}</p>
                     <p className="text-muted-foreground">{details.role}</p>
                   </div>
-                  <FieldGroup>
-                    <Field>
-                      <FieldLabel htmlFor="invitation-password">Password</FieldLabel>
-                      <Input
-                        id="invitation-password"
-                        type="password"
-                        value={password}
-                        onChange={(event) => setPassword(event.target.value)}
-                        autoComplete="new-password"
-                        minLength={8}
-                        required
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel htmlFor="invitation-confirmation">Confirm password</FieldLabel>
-                      <Input
-                        id="invitation-confirmation"
-                        type="password"
-                        value={confirmation}
-                        onChange={(event) => setConfirmation(event.target.value)}
-                        autoComplete="new-password"
-                        minLength={8}
-                        required
-                      />
-                    </Field>
-                  </FieldGroup>
-                  <Button type="submit" disabled={isSaving}>
-                    {isSaving && <Spinner data-icon="inline-start" />}
-                    Create verified account
-                  </Button>
+                  <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+                    <FieldGroup>
+                      <Field>
+                        <FieldLabel htmlFor="invitation-password">Password</FieldLabel>
+                        <Input
+                          id="invitation-password"
+                          type="password"
+                          value={password}
+                          onChange={(event) => setPassword(event.target.value)}
+                          autoComplete="new-password"
+                          minLength={8}
+                          required
+                        />
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="invitation-confirmation">Confirm password</FieldLabel>
+                        <Input
+                          id="invitation-confirmation"
+                          type="password"
+                          value={confirmation}
+                          onChange={(event) => setConfirmation(event.target.value)}
+                          autoComplete="new-password"
+                          minLength={8}
+                          required
+                        />
+                      </Field>
+                    </FieldGroup>
+                    <Button type="submit" disabled={isSaving}>
+                      {isSaving && <Spinner data-icon="inline-start" />}
+                      Save
+                    </Button>
+                  </form>
                 </>
               )}
-            </form>
+            </div>
           )}
         </CardContent>
       </Card>

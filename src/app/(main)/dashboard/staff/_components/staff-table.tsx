@@ -281,10 +281,6 @@ export function StaffTable() {
     setCurrentPage((page) => Math.min(page, totalPages));
   }, [totalPages]);
 
-  React.useEffect(() => {
-    setCurrentPage(1);
-  }, [statusFilter]);
-
   const handleSaveStaff = async (formData: StaffFormData): Promise<StaffSaveResult> => {
     if (!isAdmin) return "saved";
 
@@ -426,27 +422,9 @@ export function StaffTable() {
 
       <Card className="rounded-xl border shadow-xs">
         <CardContent className="p-4 md:p-6">
-          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-wrap items-center gap-2">
-              <ToggleGroup
-                type="single"
-                variant="outline"
-                size="sm"
-                spacing={0}
-                value={statusFilter}
-                onValueChange={(value) => {
-                  if (value) setStatusFilter(value as StatusFilter);
-                }}
-                aria-label="Filter staff by account status"
-              >
-                {filterTabs.map((tab) => (
-                  <ToggleGroupItem key={tab.key} value={tab.key} aria-label={`Show ${tab.label.toLowerCase()} staff`}>
-                    {tab.label}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-
-              {isAdmin && statusFilter !== "archived" && (
+          <div className="mb-4 grid gap-3 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
+            {isAdmin && statusFilter !== "archived" && (
+              <div className="flex items-center sm:col-start-1 sm:row-start-1">
                 <Button
                   onClick={() => {
                     setEditingStaff(null);
@@ -457,10 +435,10 @@ export function StaffTable() {
                   <Plus data-icon="inline-start" />
                   Add staff
                 </Button>
-              )}
-            </div>
+              </div>
+            )}
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 sm:col-start-2 sm:row-start-1 sm:justify-self-center">
               <label htmlFor="staff-search-input" className="font-medium text-foreground text-sm">
                 Search:
               </label>
@@ -474,6 +452,29 @@ export function StaffTable() {
                 }}
                 className="h-8 w-44 md:w-56"
               />
+            </div>
+
+            <div className="flex items-center sm:col-start-3 sm:row-start-1 sm:justify-self-end">
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                size="sm"
+                spacing={0}
+                value={statusFilter}
+                onValueChange={(value) => {
+                  if (value) {
+                    setStatusFilter(value as StatusFilter);
+                    setCurrentPage(1);
+                  }
+                }}
+                aria-label="Filter staff by account status"
+              >
+                {filterTabs.map((tab) => (
+                  <ToggleGroupItem key={tab.key} value={tab.key} aria-label={`Show ${tab.label.toLowerCase()} staff`}>
+                    {tab.label}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
             </div>
           </div>
 
@@ -526,8 +527,7 @@ export function StaffTable() {
                     const status = getAccountStatus(staff, now);
                     const StatusIcon = status.icon;
                     const isArchived = staff.accountStatus === "archived";
-                    const isInvitationExpired =
-                      Boolean(staff.isInvitation) && invitationExpiryMillis(staff) <= now;
+                    const isInvitationExpired = Boolean(staff.isInvitation) && invitationExpiryMillis(staff) <= now;
                     const isActiveInvitation = Boolean(staff.isInvitation) && !isArchived && !isInvitationExpired;
                     const isExpiredInvitation = Boolean(staff.isInvitation) && !isArchived && isInvitationExpired;
                     const isResending = resendingEmail === staff.email;
@@ -538,6 +538,12 @@ export function StaffTable() {
                         now - timestampMillis(staff.verificationSentAt) < 30_000);
                     const resendCooldownRemaining = timestampMillis(staff.verificationResendAvailableAt) - now;
                     const isResendCoolingDown = resendCooldownRemaining > 0;
+                    let resendVerificationLabel = `Resend verification to ${staff.email}`;
+                    if (isResending) {
+                      resendVerificationLabel = "Resending verification email";
+                    } else if (isResendCoolingDown) {
+                      resendVerificationLabel = `Resend available in ${formatCountdown(resendCooldownRemaining)}`;
+                    }
                     const isOwnAccount =
                       staff.uid === user?.uid || staff.authUid === user?.uid || staff.email === user?.email;
 
@@ -593,13 +599,7 @@ export function StaffTable() {
 
                               {isExpiredInvitation && (
                                 <ActionIconButton
-                                  label={
-                                    isResending
-                                      ? "Resending verification email"
-                                      : isResendCoolingDown
-                                        ? `Resend available in ${formatCountdown(resendCooldownRemaining)}`
-                                        : `Resend verification to ${staff.email}`
-                                  }
+                                  label={resendVerificationLabel}
                                   onClick={() => void handleResendVerification(staff)}
                                   disabled={Boolean(resendingEmail) || isResendCoolingDown}
                                 >
@@ -642,9 +642,7 @@ export function StaffTable() {
                                   </ActionIconButton>
                                   <ActionIconButton
                                     label={
-                                      isOwnAccount
-                                        ? "You cannot archive your own account"
-                                        : `Archive ${staff.username}`
+                                      isOwnAccount ? "You cannot archive your own account" : `Archive ${staff.username}`
                                     }
                                     onClick={() => {
                                       setStaffToArchive(staff);

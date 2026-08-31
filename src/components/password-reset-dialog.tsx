@@ -231,7 +231,8 @@ export function PasswordResetDialog({ open, onOpenChange, staff }: PasswordReset
         <DialogHeader>
           <DialogTitle>Reset password</DialogTitle>
           <DialogDescription>
-            Send a secure, single-use password reset link to {staff?.email ?? "this staff account"}.
+            Send a secure, single-use password reset link to {staff?.email ?? "this staff account"}. The link expires
+            after 5 minutes.
           </DialogDescription>
         </DialogHeader>
 

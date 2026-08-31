@@ -562,7 +562,7 @@ export function LoginForm() {
             <DialogHeader>
               <DialogTitle>Reset your password</DialogTitle>
               <DialogDescription>
-                SmartRoad will email a secure, single-use reset link to your staff account.
+                SmartRoad will email a secure, single-use reset link that expires after 5 minutes.
               </DialogDescription>
             </DialogHeader>
             <FieldGroup>

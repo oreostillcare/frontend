@@ -6,7 +6,6 @@ import {
   ApiError,
   createOpaqueToken,
   errorResponse,
-  expiresInHours,
   findStaffByEmail,
   getStaffAuthUid,
   hashToken,
@@ -21,6 +20,7 @@ const updateRequestSchema = z.object({
   requestId: requestIdSchema,
 });
 const RESET_COOLDOWN_MS = 180_000;
+const RESET_VALIDITY_MS = 5 * 60 * 1000;
 const PROCESSING_LEASE_MS = 5 * 60 * 1000;
 const CANCELLED_RESET_MESSAGE = "This password reset request has been cancelled. Please request a new reset link.";
 
@@ -58,7 +58,7 @@ function ensureActiveLatestRequest(
   ) {
     throw new ApiError(CANCELLED_RESET_MESSAGE, 410, "inactive-reset-request");
   }
-  if (!(session.expiresAt instanceof Timestamp) || session.expiresAt.toMillis() <= Date.now()) {
+  if (!(session.expiresAt instanceof Timestamp) || session.expiresAt.toMillis() <= Timestamp.now().toMillis()) {
     throw new ApiError(CANCELLED_RESET_MESSAGE, 410, "expired-reset-request");
   }
 }
@@ -78,7 +78,7 @@ async function cancelResetRequest(requestIdHash: string, reason: "cancelled" | "
     const staffRef = adminDb.collection("staff").doc(String(session.staffId));
     const staffDocument = await transaction.get(staffRef);
     const processingStartedAt = toMillis(session.processingStartedAt);
-    if (processingStartedAt && processingStartedAt + PROCESSING_LEASE_MS > Date.now()) {
+    if (processingStartedAt && processingStartedAt + PROCESSING_LEASE_MS > Timestamp.now().toMillis()) {
       throw new ApiError(
         "This password reset is already being completed and can no longer be cancelled.",
         409,
@@ -193,7 +193,7 @@ export async function POST(request: Request) {
     const requestId = createOpaqueToken();
     const requestIdHash = hashToken(requestId);
     const requestedAt = Timestamp.now();
-    const expiresAt = expiresInHours(1);
+    const expiresAt = Timestamp.fromMillis(requestedAt.toMillis() + RESET_VALIDITY_MS);
     const sessionRef = adminDb.collection("passwordResetSessions").doc(requestIdHash);
 
     const resetRequest = await adminDb.runTransaction(async (transaction) => {
@@ -205,7 +205,8 @@ export async function POST(request: Request) {
 
       const previousRequestedAt = toMillis(currentStaff.passwordResetRequestedAt);
       const currentCooldownEnd = previousRequestedAt + RESET_COOLDOWN_MS;
-      if (previousRequestedAt && currentCooldownEnd > Date.now()) {
+      const transactionNow = Timestamp.now().toMillis();
+      if (previousRequestedAt && currentCooldownEnd > transactionNow) {
         return { allowed: false as const, inProgress: false as const, cooldownEndsAt: currentCooldownEnd };
       }
 
@@ -221,7 +222,7 @@ export async function POST(request: Request) {
       if (
         (previousSession?.status === "active" || previousSession?.status === "pending") &&
         previousProcessingStartedAt &&
-        previousProcessingStartedAt + PROCESSING_LEASE_MS > Date.now()
+        previousProcessingStartedAt + PROCESSING_LEASE_MS > transactionNow
       ) {
         return { allowed: false as const, inProgress: true as const, cooldownEndsAt: currentCooldownEnd };
       }
@@ -318,7 +319,7 @@ export async function GET(request: Request) {
     if (session.status === "cancelled") {
       throw new ApiError(CANCELLED_RESET_MESSAGE, 410, "inactive-reset-request");
     }
-    if (!(session.expiresAt instanceof Timestamp) || session.expiresAt.toMillis() <= Date.now()) {
+    if (!(session.expiresAt instanceof Timestamp) || session.expiresAt.toMillis() <= Timestamp.now().toMillis()) {
       await cancelResetRequest(requestIdHash, "expired");
       throw new ApiError(CANCELLED_RESET_MESSAGE, 410, "expired-reset-request");
     }
@@ -361,7 +362,7 @@ export async function PATCH(request: Request) {
     if (!initialSession || !(initialSession.expiresAt instanceof Timestamp)) {
       throw new ApiError(CANCELLED_RESET_MESSAGE, 410, "inactive-reset-request");
     }
-    if (initialSession.expiresAt.toMillis() <= Date.now()) {
+    if (initialSession.expiresAt.toMillis() <= Timestamp.now().toMillis()) {
       await cancelResetRequest(requestIdHash, "expired");
       throw new ApiError(CANCELLED_RESET_MESSAGE, 410, "expired-reset-request");
     }

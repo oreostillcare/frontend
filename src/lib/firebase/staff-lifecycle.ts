@@ -1,6 +1,7 @@
 import "server-only";
 
-import { FieldValue, Timestamp, type DocumentData, type QueryDocumentSnapshot } from "firebase-admin/firestore";
+import type { UserRecord } from "firebase-admin/auth";
+import { type DocumentData, FieldValue, type QueryDocumentSnapshot, Timestamp } from "firebase-admin/firestore";
 
 import { adminAuth, adminDb } from "./admin";
 import {
@@ -54,11 +55,7 @@ async function getInvitationAuthUser(data: DocumentData) {
 
   const staff = await findStaffByEmail(email);
   if (staff) {
-    throw new ApiError(
-      "This invitation is already connected to a staff account.",
-      409,
-      "invitation-already-completed",
-    );
+    throw new ApiError("This invitation is already connected to a staff account.", 409, "invitation-already-completed");
   }
 
   const storedUid = typeof data.authUid === "string" ? data.authUid.trim() : "";
@@ -71,6 +68,13 @@ async function getInvitationAuthUser(data: DocumentData) {
   }
 
   return getAuthUserByEmail(email);
+}
+
+export async function deletePendingInvitationAuthUser(data: DocumentData) {
+  const authUser = await getInvitationAuthUser(data);
+  if (!authUser) return false;
+  await adminAuth.deleteUser(authUser.uid);
+  return true;
 }
 
 async function archiveInvitation(documentId: string, administratorUid: string) {
@@ -289,9 +293,13 @@ export async function cancelPendingInvitation(staffId: string) {
   if (!invitation) return { message: "Pending invitation is already cancelled." };
 
   try {
-    const authUser = await getInvitationAuthUser(invitation);
-    if (authUser) await adminAuth.deleteUser(authUser.uid);
-    await invitationRef.delete();
+    await deletePendingInvitationAuthUser(invitation);
+    await invitationRef.update({
+      status: "cancelled",
+      cancelledAt: FieldValue.serverTimestamp(),
+      lifecycleOperationId: FieldValue.delete(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
   } catch (error) {
     await adminDb
       .runTransaction(async (transaction) => {
@@ -307,7 +315,7 @@ export async function cancelPendingInvitation(staffId: string) {
     throw error;
   }
 
-  return { message: "Pending invitation cancelled and removed." };
+  return { message: "Pending invitation cancelled." };
 }
 
 async function deleteAuthUserForCleanup(data: DocumentData, isInvitation: boolean) {
@@ -315,7 +323,12 @@ async function deleteAuthUserForCleanup(data: DocumentData, isInvitation: boolea
   if (isInvitation && email && (await findStaffByEmail(email))) return;
 
   const uid = typeof data.uid === "string" && data.uid ? data.uid : String(data.authUid || "");
-  const authUser = uid ? await getAuthUserByUid(uid) : email ? await getAuthUserByEmail(email) : null;
+  let authUser: UserRecord | null = null;
+  if (uid) {
+    authUser = await getAuthUserByUid(uid);
+  } else if (email) {
+    authUser = await getAuthUserByEmail(email);
+  }
   if (!authUser) return;
   if (email && normalizeEmail(authUser.email || "") !== email) {
     throw new Error("Archived record and Firebase Authentication user do not match.");
@@ -339,6 +352,69 @@ function isExpiredArchivedStaff(document: QueryDocumentSnapshot) {
 export interface ArchivedCleanupResult {
   deleted: number;
   failed: string[];
+}
+
+export interface ExpiredInvitationCleanupResult {
+  deletedAuthUsers: number;
+  failed: string[];
+}
+
+export async function cleanupExpiredPendingInvitations(): Promise<ExpiredInvitationCleanupResult> {
+  const now = Timestamp.now();
+  const invitationSnapshot = await adminDb
+    .collection("pendingStaffInvitations")
+    .where("expiresAt", "<=", now)
+    .limit(200)
+    .get();
+  const candidates = invitationSnapshot.docs.filter((document) => {
+    const status = document.data().status;
+    return status === "pending" || status === "expired";
+  });
+
+  let deletedAuthUsers = 0;
+  const failed: string[] = [];
+  for (const candidate of candidates) {
+    const operationId = createOpaqueToken();
+    try {
+      const invitation = await adminDb.runTransaction(async (transaction) => {
+        const current = await transaction.get(candidate.ref);
+        const data = current.data();
+        if (!current.exists || !data || (data.status !== "pending" && data.status !== "expired")) return null;
+        if (!(data.expiresAt instanceof Timestamp) || data.expiresAt.toMillis() > Timestamp.now().toMillis()) {
+          return null;
+        }
+        transaction.update(candidate.ref, {
+          status: "expiring",
+          cleanupOperationId: operationId,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        return data;
+      });
+      if (!invitation) continue;
+
+      const deletedAuthUser = await deletePendingInvitationAuthUser(invitation);
+      await candidate.ref.update({
+        status: "expired",
+        expiredAt: invitation.expiredAt || FieldValue.serverTimestamp(),
+        authDeletedAt: FieldValue.serverTimestamp(),
+        cleanupOperationId: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      if (deletedAuthUser) deletedAuthUsers += 1;
+    } catch (error) {
+      await candidate.ref
+        .update({
+          status: "expired",
+          cleanupOperationId: FieldValue.delete(),
+          updatedAt: FieldValue.serverTimestamp(),
+        })
+        .catch(() => undefined);
+      failed.push(candidate.id);
+      console.error("Unable to clean up expired pending invitation:", candidate.id, error);
+    }
+  }
+
+  return { deletedAuthUsers, failed };
 }
 
 async function claimCleanupCandidate(
@@ -383,11 +459,7 @@ async function claimCleanupCandidate(
   });
 }
 
-async function releaseCleanupCandidate(
-  document: QueryDocumentSnapshot,
-  isInvitation: boolean,
-  operationId: string,
-) {
+async function releaseCleanupCandidate(document: QueryDocumentSnapshot, isInvitation: boolean, operationId: string) {
   await adminDb.runTransaction(async (transaction) => {
     const current = await transaction.get(document.ref);
     if (current.data()?.cleanupOperationId !== operationId) return;

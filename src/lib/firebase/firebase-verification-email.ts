@@ -1,6 +1,5 @@
 import "server-only";
 
-import { adminAuth } from "./admin";
 import { ApiError } from "./admin-staff";
 
 const FIREBASE_AUTH_API = "https://identitytoolkit.googleapis.com/v1/accounts";
@@ -11,7 +10,7 @@ interface FirebaseRestErrorPayload {
   };
 }
 
-interface CustomTokenExchangeResponse {
+interface PasswordSignInResponse {
   idToken?: string;
 }
 
@@ -33,9 +32,6 @@ function verificationEmailError(code: string) {
       429,
       "verification-rate-limited",
     );
-  }
-  if (code === "USER_DISABLED") {
-    return new ApiError("Restore this pending account before resending verification.", 409, "account-archived");
   }
   if (code === "EMAIL_NOT_FOUND" || code === "USER_NOT_FOUND") {
     return new ApiError("The pending Firebase Authentication user was not found.", 409, "missing-auth-user");
@@ -64,26 +60,19 @@ async function firebaseAuthRequest<T>(path: string, body: Record<string, unknown
   return payload;
 }
 
-export async function sendFirebaseVerificationEmail(uid: string, email: string, continueUrl: string) {
-  const customToken = await adminAuth.createCustomToken(uid);
-  const exchange = await firebaseAuthRequest<CustomTokenExchangeResponse>("signInWithCustomToken", {
-    token: customToken,
+export async function sendFirebaseVerificationEmail(email: string, temporaryPassword: string, continueUrl: string) {
+  const signIn = await firebaseAuthRequest<PasswordSignInResponse>("signInWithPassword", {
+    email,
+    password: temporaryPassword,
     returnSecureToken: true,
   });
-  if (!exchange.idToken) {
+  if (!signIn.idToken) {
     throw new ApiError("Firebase could not authorize the verification email.", 502, "verification-email-failed");
   }
 
-  try {
-    await firebaseAuthRequest("sendOobCode", {
-      requestType: "VERIFY_EMAIL",
-      email,
-      idToken: exchange.idToken,
-      continueUrl,
-    });
-  } finally {
-    await adminAuth.revokeRefreshTokens(uid).catch((error) => {
-      console.error("Unable to revoke the temporary verification-email session:", error);
-    });
-  }
+  await firebaseAuthRequest("sendOobCode", {
+    requestType: "VERIFY_EMAIL",
+    idToken: signIn.idToken,
+    continueUrl,
+  });
 }

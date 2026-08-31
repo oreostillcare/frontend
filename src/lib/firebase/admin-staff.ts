@@ -150,17 +150,17 @@ export async function getStaffAuthUid(document: DocumentSnapshot) {
 }
 
 export function expiresInHours(hours: number) {
-  return Timestamp.fromMillis(Date.now() + hours * 60 * 60 * 1000);
+  return Timestamp.fromMillis(Timestamp.now().toMillis() + hours * 60 * 60 * 1000);
 }
 
 export function getStaffInvitationExpirationMillis(data: Record<string, unknown>) {
   const storedExpiry = data.expiresAt instanceof Timestamp ? data.expiresAt.toMillis() : 0;
-  const sentAt =
-    data.verificationSentAt instanceof Timestamp
-      ? data.verificationSentAt.toMillis()
-      : data.createdAt instanceof Timestamp
-        ? data.createdAt.toMillis()
-        : 0;
+  let sentAt = 0;
+  if (data.verificationSentAt instanceof Timestamp) {
+    sentAt = data.verificationSentAt.toMillis();
+  } else if (data.createdAt instanceof Timestamp) {
+    sentAt = data.createdAt.toMillis();
+  }
   const oneHourExpiry = sentAt ? sentAt + 60 * 60 * 1000 : 0;
   if (storedExpiry && oneHourExpiry) return Math.min(storedExpiry, oneHourExpiry);
   return storedExpiry || oneHourExpiry;

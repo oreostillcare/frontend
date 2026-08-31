@@ -1,4 +1,4 @@
-import { cleanupArchivedUnverifiedAccounts } from "@/lib/firebase/staff-lifecycle";
+import { cleanupArchivedUnverifiedAccounts, cleanupExpiredPendingInvitations } from "@/lib/firebase/staff-lifecycle";
 
 export async function GET(request: Request) {
   const cronSecret = process.env.CRON_SECRET;
@@ -10,14 +10,19 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await cleanupArchivedUnverifiedAccounts();
+    const [archivedResult, invitationResult] = await Promise.all([
+      cleanupArchivedUnverifiedAccounts(),
+      cleanupExpiredPendingInvitations(),
+    ]);
+    const failed = archivedResult.failed.length + invitationResult.failed.length;
     return Response.json(
       {
-        success: result.failed.length === 0,
-        deleted: result.deleted,
-        failed: result.failed.length,
+        success: failed === 0,
+        deleted: archivedResult.deleted,
+        expiredInvitationAuthUsersDeleted: invitationResult.deletedAuthUsers,
+        failed,
       },
-      { status: result.failed.length === 0 ? 200 : 500 },
+      { status: failed === 0 ? 200 : 500 },
     );
   } catch (error) {
     console.error("Archived unverified staff cleanup failed:", error);
