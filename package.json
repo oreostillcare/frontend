@@ -11,6 +11,8 @@
     "test:watch": "vitest",
     "test:phase1": "vitest run src/lib/firebase/admin-staff.test.ts src/app/api/auth/password-reset/route.test.ts src/lib/firebase/email-change-status.test.ts src/lib/firebase/firebase-verification-email.test.ts",
     "test:phase2": "vitest run src/lib/firebase/staff-lifecycle.test.ts src/app/api/staff/invitations/route.test.ts src/app/api/staff/invitations/verify/route.test.ts src/app/api/staff/invitations/complete/route.test.ts src/app/api/staff/resend-verification/route.test.ts src/app/api/staff/[id]/email-change/route.test.ts src/app/api/auth/resolve-identifier/route.test.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "lint": "biome lint",
     "format": "biome format --write",
     "check": "biome check",
@@ -70,6 +72,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.8",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4.3.3",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.3",
