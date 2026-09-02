@@ -10,6 +10,7 @@
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "test:phase1": "vitest run src/lib/firebase/admin-staff.test.ts src/app/api/auth/password-reset/route.test.ts src/lib/firebase/email-change-status.test.ts src/lib/firebase/firebase-verification-email.test.ts",
+    "test:phase2": "vitest run src/lib/firebase/staff-lifecycle.test.ts src/app/api/staff/invitations/route.test.ts src/app/api/staff/invitations/verify/route.test.ts src/app/api/staff/invitations/complete/route.test.ts src/app/api/staff/resend-verification/route.test.ts src/app/api/staff/[id]/email-change/route.test.ts src/app/api/auth/resolve-identifier/route.test.ts",
     "lint": "biome lint",
     "format": "biome format --write",
     "check": "biome check",
