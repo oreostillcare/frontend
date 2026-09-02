@@ -13,6 +13,7 @@
     "test:phase2": "vitest run src/lib/firebase/staff-lifecycle.test.ts src/app/api/staff/invitations/route.test.ts src/app/api/staff/invitations/verify/route.test.ts src/app/api/staff/invitations/complete/route.test.ts src/app/api/staff/resend-verification/route.test.ts src/app/api/staff/[id]/email-change/route.test.ts src/app/api/auth/resolve-identifier/route.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "test:all": "npm run test:unit && backend\\.venv\\Scripts\\python.exe -m pytest backend/tests -q && npm run build && npm run test:e2e",
     "lint": "biome lint",
     "format": "biome format --write",
     "check": "biome check",
