@@ -5,17 +5,24 @@ from collections import Counter
 import cv2
 
 from config import Settings, mask_rtsp_url
-from detector import Detector
+from detector import Detector, ModelPool, VEHICLE_CLASSES
 
 
 class CameraWorker:
-    """Owns one RTSP capture and one detector pipeline for a physical camera."""
+    """Owns one camera capture and one detector pipeline for a physical camera."""
 
-    def __init__(self, camera_id: int, url: str, config: Settings, line: tuple[int, int, int, int]):
+    def __init__(
+        self,
+        camera_id: int,
+        source: int | str | None,
+        config: Settings,
+        line: tuple[int, int, int, int],
+        model_pool: ModelPool | None = None,
+    ):
         self.camera_id = camera_id
-        self.url = url
+        self.source = source
         self.config = config
-        self.detector = Detector(config, line)
+        self.detector = Detector(config, line, model_pool=model_pool)
 
         self._stop = threading.Event()
         self._capture_thread: threading.Thread | None = None
@@ -42,7 +49,7 @@ class CameraWorker:
     def start(self) -> None:
         if self._capture_thread and self._capture_thread.is_alive():
             return
-        if not self.url:
+        if not self._source_is_configured(self.source):
             self.error = "Camera source not configured"
             return
 
@@ -71,51 +78,92 @@ class CameraWorker:
         value = instant if previous <= 0 else (previous * 0.8) + (instant * 0.2)
         return round(value, 1)
 
+    @staticmethod
+    def _source_is_configured(source: int | str | None) -> bool:
+        if isinstance(source, int):
+            return source >= 0
+        return bool(source and source.strip())
+
+    def _open_capture(self):
+        # RTSP - FOR FUTURE USE
+        # The source URL may include username/password authentication. Restore
+        # this return when switching the active source back to RTSP.
+        # return cv2.VideoCapture(str(self.source), cv2.CAP_FFMPEG)
+
+        # Camera Source = USB Cameras
+        # DirectShow indices correspond to the Windows friendly-name order used
+        # to configure DV20 USB CAMERA and Web Camera.
+        return cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
+
+    def _capture_errors(self) -> tuple[str, str]:
+        # RTSP - FOR FUTURE USE
+        # return (
+        #     f"Unable to connect to {mask_rtsp_url(str(self.source))}",
+        #     "Camera stream interrupted; reconnecting",
+        # )
+
+        # Camera Source = USB Cameras
+        return (
+            f"USB camera {self.camera_id} unavailable",
+            f"USB camera {self.camera_id} interrupted; reconnecting",
+        )
+
+    def _mark_offline(self, error: str) -> None:
+        self.online = False
+        self.error = error
+        with self._raw_condition:
+            self._raw_frame = None
+            self._raw_condition.notify_all()
+        with self._jpeg_condition:
+            self._jpeg_frame = None
+            self._jpeg_condition.notify_all()
+
     def _capture_loop(self) -> None:
         last_capture_at: float | None = None
+        unavailable_error, interrupted_error = self._capture_errors()
 
         while not self._stop.is_set():
-            capture = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
-            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-            if not capture.isOpened():
-                self.online = False
-                self.error = f"Unable to connect to {mask_rtsp_url(self.url)}"
-                capture.release()
-                self._stop.wait(self.config.reconnect_seconds)
-                continue
+            capture = None
 
             try:
-                while not self._stop.is_set():
-                    ok, frame = capture.read()
-                    captured_at = time.perf_counter()
-                    if not ok:
-                        self.online = False
-                        self.error = "Camera stream interrupted; reconnecting"
+                capture = self._open_capture()
+                capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+                if not capture.isOpened():
+                    self._mark_offline(unavailable_error)
+                else:
+                    while not self._stop.is_set():
+                        ok, frame = capture.read()
+                        captured_at = time.perf_counter()
+                        if not ok or frame is None:
+                            self._mark_offline(interrupted_error)
+                            break
+
+                        if last_capture_at is not None:
+                            elapsed = captured_at - last_capture_at
+                            if elapsed > 0:
+                                self.capture_fps = self._smoothed_fps(self.capture_fps, 1 / elapsed)
+                        last_capture_at = captured_at
+
+                        # This is intentionally a one-frame overwrite buffer. The
+                        # detector always receives the newest frame, so stale camera
+                        # frames never form a processing queue.
                         with self._raw_condition:
-                            self._raw_frame = None
+                            self._raw_frame = frame
+                            self._raw_captured_at = captured_at
+                            self._raw_version += 1
                             self._raw_condition.notify_all()
-                        break
 
-                    if last_capture_at is not None:
-                        elapsed = captured_at - last_capture_at
-                        if elapsed > 0:
-                            self.capture_fps = self._smoothed_fps(self.capture_fps, 1 / elapsed)
-                    last_capture_at = captured_at
-
-                    # This is intentionally a one-frame overwrite buffer. The
-                    # detector always receives the newest frame and old RTSP
-                    # frames never form a processing queue.
-                    with self._raw_condition:
-                        self._raw_frame = frame
-                        self._raw_captured_at = captured_at
-                        self._raw_version += 1
-                        self._raw_condition.notify_all()
-
-                    self.online = True
-                    self.error = None
+                        self.online = True
+                        self.error = None
+            except (cv2.error, OSError, RuntimeError):
+                self._mark_offline(unavailable_error)
             finally:
-                capture.release()
+                if capture is not None:
+                    try:
+                        capture.release()
+                    except (cv2.error, OSError, RuntimeError):
+                        pass
 
             self._stop.wait(self.config.reconnect_seconds)
 
@@ -152,7 +200,8 @@ class CameraWorker:
                     self._jpeg_condition.notify_all()
 
             self.visible = len({item["trackId"] for item in detections})
-            self.classes = dict(Counter(item["class"] for item in detections))
+            counts = Counter(item["class"] for item in detections)
+            self.classes = {name: counts.get(name, 0) for name in sorted(VEHICLE_CLASSES)}
             self.processing_ms = round((completed_at - started_at) * 1000, 1)
             self.frame_age_ms = round((completed_at - captured_at) * 1000, 1)
 
@@ -189,7 +238,7 @@ class CameraWorker:
         passed = self.detector.track_state.passed if self.online and self.config.line_counting else None
         return {
             "id": self.camera_id,
-            "configured": bool(self.url),
+            "configured": self._source_is_configured(self.source),
             "online": self.online,
             "testMirror": False,
             "captureFps": self.capture_fps if self.online else None,
@@ -197,7 +246,7 @@ class CameraWorker:
             "processingMs": self.processing_ms if self.online else None,
             "frameAgeMs": self.frame_age_ms if self.online else None,
             "tracker": "ByteTrack",
-            "modelOnline": self.detector.model is not None,
+            "modelOnline": self.detector.model_online,
             "visibleVehicles": self.visible if self.online else None,
             "vehiclesPassed": passed,
             "classes": self.classes if self.online else {},

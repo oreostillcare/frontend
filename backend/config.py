@@ -32,11 +32,16 @@ def env_camera_url(name: str) -> str:
 
 @dataclass(frozen=True)
 class Settings:
-    test_single_camera_mode: bool = env_bool("TEST_SINGLE_CAMERA_MODE", True)
+    dv20_camera_index: int = env_int("DV20_USB_CAMERA_INDEX", env_int("USB_CAMERA_1_INDEX", 2))
+    web_camera_index: int = env_int("WEB_CAMERA_INDEX", env_int("USB_CAMERA_2_INDEX", 1))
+
+    # RTSP - FOR FUTURE USE
+    # Keep the authenticated stream URLs loaded so RTSP can be restored without
+    # rebuilding the connection configuration.
     camera_1_url: str = env_camera_url("CAMERA_1_RTSP_URL")
     camera_2_url: str = env_camera_url("CAMERA_2_RTSP_URL")
-    yolo_model: str = os.getenv("YOLO_MODEL", "yolov8n.pt")
-    custom_yolo_model: Path = BASE_DIR / os.getenv("CUSTOM_YOLO_MODEL", "models/best.pt")
+    local_yolo_model: Path = BASE_DIR / os.getenv("LOCAL_YOLO_MODEL", "models/trained_local.pt")
+    coco_yolo_model: Path = BASE_DIR / os.getenv("COCO_YOLO_MODEL", "models/yolov8n.pt")
     confidence: float = env_float("DETECTION_CONFIDENCE", 0.35)
     image_size: int = env_int("DETECTION_IMAGE_SIZE", 640)
     detection_fps: float = env_float("DETECTION_FPS", 5.0)

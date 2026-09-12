@@ -4,12 +4,15 @@ export interface VehicleClassCounts {
   motorcycle?: number;
   truck?: number;
   bus?: number;
+  bicycle?: number;
   ebike?: number;
-  etrike?: number;
   jeepney?: number;
+  tricycle?: number;
 }
 export interface CameraStatus {
   id: number;
+  nodeId?: "node-a" | "node-b";
+  laneId?: "lane-a" | "lane-b";
   configured: boolean;
   online: boolean;
   testMirror?: boolean;
@@ -26,11 +29,17 @@ export interface CameraStatus {
 }
 export interface TrafficNode {
   signal: TrafficSignal;
+  cameraId?: number;
+  nodeId?: "node-a" | "node-b";
+  laneId?: "lane-a" | "lane-b";
+  online?: boolean;
   remainingSeconds?: number;
   durationSeconds?: number;
   mode?: string;
+  status?: string;
   visibleVehicles?: number;
   vehiclesPassed?: number;
+  classes?: VehicleClassCounts;
 }
 export interface SystemStatus {
   status: "online" | "offline" | "initializing";
@@ -38,12 +47,16 @@ export interface SystemStatus {
   batteryPercent?: number;
   charging?: boolean;
   yoloOnline?: boolean;
+  cameraStatus?: {
+    online: number;
+    total: number;
+  };
   cameras?: CameraStatus[];
   nodeA?: TrafficNode;
   nodeB?: TrafficNode;
 }
 export interface ModelStatus {
-  model: "custom" | "coco" | "unavailable";
+  model: "dual" | "custom" | "coco" | "unavailable";
   weights?: string;
   online?: boolean;
 }

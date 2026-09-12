@@ -160,12 +160,6 @@ try {
       if ($LASTEXITCODE -ne 0) {
         throw "Validating backend/models/best.pt failed with exit code $LASTEXITCODE."
       }
-
-      Write-Host "Downloading the standard YOLO fallback model if it is not already available..."
-      & $venvPython -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
-      if ($LASTEXITCODE -ne 0) {
-        throw "Downloading the YOLO model failed with exit code $LASTEXITCODE."
-      }
     }
     finally {
       Pop-Location

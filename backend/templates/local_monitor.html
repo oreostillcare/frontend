@@ -83,11 +83,9 @@
           <div class="camera-header">
             <div>
               <h2 class="camera-title">Camera {{ "A" if camera_id == 1 else "B" }} / Lane {{ "A" if camera_id == 1 else "B" }}</h2>
-              <p class="camera-description">
-                {% if camera_id == 2 and single_camera_mode %}Camera A mirror; shared local detection worker{% else %}Processed locally; no cloud viewer required{% endif %}
-              </p>
+              <p class="camera-description">Independent USB camera, detector tracking, counting, and telemetry</p>
             </div>
-            <span class="badge" id="camera-{{ camera_id }}-status">{% if camera_id == 2 and single_camera_mode %}TEST MIRROR{% else %}CONNECTING{% endif %}</span>
+            <span class="badge" id="camera-{{ camera_id }}-status">CONNECTING</span>
           </div>
           <div class="feed">
             <img src="/video/camera/{{ camera_id }}" alt="Processed Camera {{ camera_id }} feed" data-camera-id="{{ camera_id }}" />
@@ -105,7 +103,7 @@
       </section>
     </main>
     <script>
-      const vehicleClasses = ["car", "motorcycle", "truck", "bus", "ebike", "etrike", "jeepney"];
+      const vehicleClasses = ["car", "motorcycle", "truck", "bus", "bicycle", "ebike", "jeepney", "tricycle"];
       const value = (item) => item === null || item === undefined ? "--" : item;
 
       function renderCamera(camera) {
@@ -113,7 +111,7 @@
         if (!card) return;
         card.dataset.online = String(Boolean(camera.online));
         const status = document.getElementById(`camera-${camera.id}-status`);
-        status.textContent = camera.testMirror ? "TEST MIRROR" : camera.online ? "LIVE" : "OFFLINE";
+        status.textContent = camera.online ? "LIVE" : "OFFLINE";
         status.className = `badge ${camera.online ? "online" : "offline"}`;
         document.getElementById(`camera-${camera.id}-fps`).textContent = value(camera.fps);
         document.getElementById(`camera-${camera.id}-visible`).textContent = value(camera.visibleVehicles);

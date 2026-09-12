@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useTelemetry } from "@/hooks/use-telemetry";
 import type { CameraStatus, TrafficNode } from "@/lib/api/types";
 
-const classes = ["car", "motorcycle", "truck", "bus", "ebike", "etrike", "jeepney"] as const;
+const classes = ["car", "motorcycle", "truck", "bus", "bicycle", "ebike", "jeepney", "tricycle"] as const;
 const value = (input: number | string | undefined) => input ?? "--";
 
 function StatusCard({
@@ -48,6 +48,8 @@ function NodeCard({
   camera?: CameraStatus;
 }) {
   const signal = node?.signal ?? "UNKNOWN";
+  const cameraOnline = node?.online ?? camera?.online;
+  const classCounts = node?.classes ?? camera?.classes;
   return (
     <Card>
       <CardHeader>
@@ -71,24 +73,28 @@ function NodeCard({
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Visible</p>
-            <p className="font-heading text-2xl">{value(camera?.visibleVehicles)}</p>
+            <p className="font-heading text-2xl">{value(node?.visibleVehicles ?? camera?.visibleVehicles)}</p>
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Passed</p>
-            <p className="font-heading text-2xl">{value(camera?.vehiclesPassed)}</p>
+            <p className="font-heading text-2xl">{value(node?.vehiclesPassed ?? camera?.vehiclesPassed)}</p>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
           {classes.map((item) => (
             <div className="rounded-lg bg-muted/50 px-3 py-2" key={item}>
               <span className="capitalize text-muted-foreground">{item}</span>
-              <span className="float-right font-medium">{value(camera?.classes?.[item])}</span>
+              <span className="float-right font-medium">{value(classCounts?.[item])}</span>
             </div>
           ))}
         </div>
         <p className="text-xs text-muted-foreground">
-          Mode: {value(node?.mode)} · Camera:{" "}
-          {camera?.online ? "Online" : camera?.configured ? "Offline" : "Not available"}
+          Mode: {value(node?.mode ?? node?.status)} · Camera:{" "}
+          {cameraOnline === true
+            ? "Online"
+            : cameraOnline === false || camera?.configured
+              ? "Offline"
+              : "Not available"}
         </p>
       </CardContent>
     </Card>
@@ -105,10 +111,10 @@ export function TrafficDashboard() {
         ))}
       </div>
     );
-  const cameraA = cameras[0];
-  const cameraB = cameras[1]?.testMirror ? undefined : cameras[1];
-  const physicalCameras = cameras.filter((camera) => !camera.testMirror);
-  const expectedCameraCount = Math.max(physicalCameras.length, 1);
+  const cameraA = cameras.find((camera) => camera.id === 1 && (!camera.nodeId || camera.nodeId === "node-a"));
+  const cameraB = cameras.find((camera) => camera.id === 2 && (!camera.nodeId || camera.nodeId === "node-b"));
+  const onlineCameras = system?.cameraStatus?.online;
+  const totalCameras = system?.cameraStatus?.total;
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -130,7 +136,7 @@ export function TrafficDashboard() {
         <StatusCard title="Detection Service" value={system?.yoloOnline ? "YOLO Online" : "YOLO Offline"} icon={Cpu} />
         <StatusCard
           title="Cameras"
-          value={`${physicalCameras.filter((item) => item.online).length} / ${expectedCameraCount} online`}
+          value={`${onlineCameras ?? "--"}/${totalCameras ?? "--"} online`}
           icon={Camera}
         />
       </div>

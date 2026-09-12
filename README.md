@@ -11,11 +11,11 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\setup.ps1
 ```
 
-If Node.js is missing, the script automatically installs the current Node.js LTS release through Windows Package Manager (`winget`). Windows may request administrator approval. It then uses `npm ci` for the locked frontend dependencies, creates `backend/.venv`, installs `backend/requirements.txt`, creates local environment files from the committed examples without overwriting existing files, verifies the bundled custom model, and downloads the standard YOLO fallback model. Edit `.env.local` and `backend/.env` after setup.
+If Node.js is missing, the script automatically installs the current Node.js LTS release through Windows Package Manager (`winget`). Windows may request administrator approval. It then uses `npm ci` for the locked frontend dependencies, creates `backend/.venv`, installs `backend/requirements.txt`, creates local environment files from the committed examples without overwriting existing files, and verifies the bundled custom model. Edit `.env.local` and `backend/.env` after setup.
 
 If `winget` is unavailable, install Node.js LTS manually from [nodejs.org](https://nodejs.org/) and rerun the script.
 
-The selected custom runtime weights are included at `backend/models/best.pt`; the application uses them before the standard COCO fallback. The training datasets are not needed to run detection. Other training outputs, videos, logs, environment files, virtual environments, and build output are deliberately excluded from Git. Dataset downloads are optional because they are large and their URLs are private:
+The selected custom runtime weights are included at `backend/models/best.pt`; the live application uses only this checkpoint and does not load a COCO fallback. If the custom checkpoint is unavailable, the model reports offline instead of downloading another model. The training datasets are not needed to run detection. Other training outputs, videos, logs, environment files, virtual environments, and build output are deliberately excluded from Git. Dataset downloads are optional because they are large and their URLs are private:
 
 ```powershell
 .\setup.ps1 -DownloadDatasets
@@ -44,7 +44,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-If activation is blocked, run `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` followed by `.\.venv\Scripts\python.exe app.py`. Copy `.env.example` to `.env`, then add private RTSP and Roboflow values. The committed example contains placeholders only.
+If activation is blocked, run `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` followed by `.\.venv\Scripts\python.exe app.py`. Copy `.env.example` to `.env`, then set `LAPTOP_CAMERA_INDEX` if the webcam is not device `0`. The retained RTSP and Roboflow fields are placeholders for future/private values.
 
 The backend starts detection immediately; opening a browser does not create the camera or inference worker. For an offline, Flask-only view that does not require Next.js, Firebase, or internet access, open:
 
@@ -52,9 +52,9 @@ The backend starts detection immediately; opening a browser does not create the 
 http://127.0.0.1:5000/local
 ```
 
-Camera capture continuously drains RTSP into a one-frame overwrite buffer. YOLO always takes the newest available frame, so inference that runs slower than the camera drops stale frames instead of accumulating latency. `frameAgeMs` and `processingMs` are exposed in local telemetry for latency diagnosis.
+Camera capture continuously drains the laptop webcam into a one-frame overwrite buffer. YOLO always takes the newest available frame, so inference that runs slower than the camera drops stale frames instead of accumulating latency. `frameAgeMs` and `processingMs` are exposed in local telemetry for latency diagnosis. The RTSP URL, authentication, FFmpeg connection, reconnection, and masked-error path remain in the backend under `RTSP - FOR FUTURE USE`.
 
-While `TEST_SINGLE_CAMERA_MODE=true`, the Flask console and Next.js monitoring page render Camera A twice for a two-view load test. Camera B is explicitly labeled `TEST MIRROR`; both MJPEG endpoints share Camera A's single capture, YOLO, ByteTrack, and latest JPEG buffer. This adds only a second viewer/network decode path, not a second inference pipeline. When test mode is disabled, Camera 2 receives its own physical stream and worker.
+While the laptop webcam is active, the Flask console and Next.js monitoring page render Camera A twice. Camera B is explicitly labeled `TEST MIRROR`; both MJPEG endpoints share Camera A's single capture, YOLO, ByteTrack, and latest JPEG buffer. This avoids opening the laptop webcam twice. `TEST_SINGLE_CAMERA_MODE` and the second physical worker remain available for the future RTSP mode.
 
 ## Datasets and training
 
@@ -75,12 +75,12 @@ For LAN development on the configured workstation, open `http://192.168.1.12:300
 
 ## Camera architecture
 
-With `TEST_SINGLE_CAMERA_MODE=true`, Flask creates one `CameraWorker`, one `VideoCapture`, one YOLO model/tracking pipeline, and one latest JPEG buffer. Both MJPEG endpoints consume that buffer; Camera B is labeled as a test mirror. When disabled, Camera 2 receives its own worker and independent ByteTrack/counting state.
+In laptop-webcam mode, Flask creates one `CameraWorker`, one `VideoCapture`, one YOLO model/tracking pipeline, and one latest JPEG buffer. Both MJPEG endpoints consume that buffer, and Camera B is labeled as a test mirror. The retained RTSP mode can restore `TEST_SINGLE_CAMERA_MODE`; when disabled there, Camera 2 receives its own worker and independent ByteTrack/counting state.
 
 Configure the counting line with `LINE_X1`, `LINE_Y1`, `LINE_X2`, and `LINE_Y2`. The defaults are placeholders and must be calibrated against the installed camera view.
 
 Line counting is currently disabled with `ENABLE_LINE_COUNTING=false` so testing focuses on detection and tracking. While disabled, the video has no counting line or passed counter and the dashboard reports passed vehicles as unavailable.
 
-The local test configuration uses the camera's lower-bandwidth `stream2` profile at a target of 10 detection FPS. Stock COCO inference is restricted to `car`, `motorcycle`, `truck`, and `bus`; the local confidence threshold is 0.25 to improve recall for smaller motorcycles.
+The local test configuration uses laptop webcam device `0` by default at a target of 10 detection FPS. All supported vehicle classes are inferred by the custom `best.pt` checkpoint at the configured confidence threshold. The retained RTSP configuration can still select the lower-bandwidth `stream2` profile when that source is restored.
 
 Firebase Authentication can operate without Realtime Database. Until `NEXT_PUBLIC_FIREBASE_DATABASE_URL` is provided, historical analytics and logs intentionally show empty states.

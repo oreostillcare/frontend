@@ -8,18 +8,31 @@ from camera import CameraWorker
 
 
 class FakeDetector:
-    def __init__(self, config, line):
+    def __init__(self, config, line, use_coco_fallback=True, model_pool=None):
         self.config = config
         self.line = line
+        self.use_coco_fallback = use_coco_fallback
         self.model = object()
+        self.model_online = True
         self.track_state = SimpleNamespace(passed=12)
+
+
+class StopAfterRetry:
+    stopped = False
+
+    def is_set(self):
+        return self.stopped
+
+    def wait(self, _timeout):
+        self.stopped = True
+        return True
 
 
 @pytest.fixture
 def worker(monkeypatch):
     monkeypatch.setattr(camera_module, "Detector", FakeDetector)
     config = SimpleNamespace(detection_fps=5.0, line_counting=True, reconnect_seconds=0.01)
-    return CameraWorker(1, "rtsp://camera.test/stream1", config, (0, 50, 100, 50))
+    return CameraWorker(1, 0, config, (0, 50, 100, 50))
 
 
 @pytest.mark.parametrize(
@@ -34,10 +47,14 @@ def test_smoothed_fps(previous, instant, expected):
     assert CameraWorker._smoothed_fps(previous, instant) == expected
 
 
+def test_camera_worker_enables_dual_model_detection(worker):
+    assert worker.detector.use_coco_fallback is True
+
+
 def test_start_rejects_an_unconfigured_camera(monkeypatch):
     monkeypatch.setattr(camera_module, "Detector", FakeDetector)
     config = SimpleNamespace(detection_fps=5.0, line_counting=True, reconnect_seconds=1.0)
-    worker = CameraWorker(1, "", config, (0, 0, 10, 0))
+    worker = CameraWorker(1, None, config, (0, 0, 10, 0))
 
     worker.start()
 
@@ -69,6 +86,89 @@ def test_start_creates_capture_and_processing_threads_once(monkeypatch, worker):
     assert len(threads) == 2
     assert {thread.kwargs["name"] for thread in threads} == {"camera-capture-1", "camera-detection-1"}
     assert all(thread.started for thread in threads)
+
+
+def test_open_capture_uses_configured_directshow_index(monkeypatch, worker):
+    capture = object()
+    video_capture = Mock(return_value=capture)
+    monkeypatch.setattr(camera_module.cv2, "VideoCapture", video_capture)
+
+    assert worker._open_capture() is capture
+    video_capture.assert_called_once_with(0, camera_module.cv2.CAP_DSHOW)
+
+
+def test_capture_loop_marks_unavailable_webcam_offline_without_crashing(monkeypatch, worker):
+    capture = Mock()
+    capture.isOpened.return_value = False
+    monkeypatch.setattr(camera_module.cv2, "VideoCapture", Mock(return_value=capture))
+    worker._stop = StopAfterRetry()
+
+    worker._capture_loop()
+
+    assert worker.online is False
+    assert worker.error == "USB camera 1 unavailable"
+    assert worker._raw_frame is None
+    capture.release.assert_called_once()
+
+
+def test_capture_loop_handles_webcam_driver_error_without_crashing(monkeypatch, worker):
+    monkeypatch.setattr(
+        camera_module.cv2,
+        "VideoCapture",
+        Mock(side_effect=camera_module.cv2.error("camera unavailable")),
+    )
+    worker._stop = StopAfterRetry()
+
+    worker._capture_loop()
+
+    assert worker.online is False
+    assert worker.error == "USB camera 1 unavailable"
+
+
+@pytest.mark.parametrize("read_result", [(False, None), (True, None)])
+def test_capture_loop_marks_webcam_read_failure_offline(monkeypatch, worker, read_result):
+    capture = Mock()
+    capture.isOpened.return_value = True
+    capture.read.return_value = read_result
+    monkeypatch.setattr(camera_module.cv2, "VideoCapture", Mock(return_value=capture))
+    worker._stop = StopAfterRetry()
+    worker._raw_frame = object()
+    worker._jpeg_frame = b"stale-jpeg"
+
+    worker._capture_loop()
+
+    assert worker.online is False
+    assert worker.error == "USB camera 1 interrupted; reconnecting"
+    assert worker._raw_frame is None
+    assert worker._jpeg_frame is None
+    capture.release.assert_called_once()
+
+
+def test_capture_loop_publishes_webcam_frame_and_marks_camera_online(monkeypatch, worker):
+    class StopAfterFrame:
+        checks = 0
+
+        def is_set(self):
+            self.checks += 1
+            return self.checks >= 3
+
+        def wait(self, _timeout):
+            return True
+
+    frame = object()
+    capture = Mock()
+    capture.isOpened.return_value = True
+    capture.read.return_value = (True, frame)
+    monkeypatch.setattr(camera_module.cv2, "VideoCapture", Mock(return_value=capture))
+    worker._stop = StopAfterFrame()
+
+    worker._capture_loop()
+
+    assert worker.online is True
+    assert worker.error is None
+    assert worker._raw_frame is frame
+    assert worker._raw_version == 1
+    capture.release.assert_called_once()
 
 
 def test_offline_telemetry_hides_stale_detection_values(worker):

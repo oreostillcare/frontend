@@ -5,7 +5,7 @@ from ultralytics import YOLO
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "datasets" / "combined" / "data.yaml"
-BASE_MODEL = ROOT / "models" / "best.pt"
+BASE_MODEL = ROOT / "models" / "trained_local.pt"
 EXPECTED_CLASSES = [
     "etrike", "ebike", "bicycle", "bus", "jeepney", "motorcycle",
     "van", "pickup", "suv", "sedan", "truck", "ambulance", "tricycle",
@@ -74,9 +74,9 @@ def main():
         f"Independent test: mAP50={test_metrics.box.map50:.4f}, "
         f"mAP50-95={test_metrics.box.map:.4f}"
     )
-    destination = ROOT / "models" / "best.pt"
+    destination = ROOT / "models" / "trained_local.pt"
     destination.parent.mkdir(parents=True, exist_ok=True)
-    backup = destination.with_name("best-before-full-ph.pt")
+    backup = destination.with_name("trained-local-before-full-ph.pt")
     if destination.exists() and not backup.exists():
         shutil.copy2(destination, backup)
     shutil.copy2(best, destination)
