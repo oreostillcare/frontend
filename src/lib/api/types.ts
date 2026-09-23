@@ -9,6 +9,14 @@ export interface VehicleClassCounts {
   jeepney?: number;
   tricycle?: number;
 }
+export interface IncomingVehicleRecord {
+  gid: string;
+  trackId?: number | null;
+  class: string;
+  confidence?: number | null;
+  detectedAt: string;
+  points: number;
+}
 export interface CameraStatus {
   id: number;
   nodeId?: "node-a" | "node-b";
@@ -26,6 +34,11 @@ export interface CameraStatus {
   visibleVehicles?: number;
   vehiclesPassed?: number;
   classes?: VehicleClassCounts;
+  incomingVehicles?: IncomingVehicleRecord[];
+  incomingPoints?: number | null;
+  totalVehicles?: number | null;
+  expectedVehicles?: number | null;
+  vehicleCountState?: "CALCULATING" | "LOCKED BATCH" | "EXPECTING" | "OFFLINE";
 }
 export interface TrafficNode {
   signal: TrafficSignal;
@@ -40,6 +53,64 @@ export interface TrafficNode {
   visibleVehicles?: number;
   vehiclesPassed?: number;
   classes?: VehicleClassCounts;
+  incomingVehicles?: IncomingVehicleRecord[];
+  incomingPoints?: number | null;
+  totalVehicles?: number | null;
+  expectedVehicles?: number | null;
+  vehicleCountState?: "CALCULATING" | "LOCKED BATCH" | "EXPECTING" | "OFFLINE";
+}
+export interface TrafficControlNode {
+  points: number;
+  ready: boolean;
+  signal: TrafficSignal;
+}
+export interface TrafficControlStatus {
+  enabled: boolean;
+  mode: "TRANSACTION_BATCH" | "POINT_PRIORITY" | "DISABLED";
+  decision: "nodeA" | "nodeB" | "allRed" | null;
+  commandedState: string;
+  reason: string;
+  nodeA: TrafficControlNode;
+  nodeB: TrafficControlNode;
+  transaction: TrafficTransaction | null;
+  lastCompletedTransaction: TrafficTransaction | null;
+  firestoreUploadEnabled: boolean;
+  lastError: string | null;
+}
+export interface ReleasedVehicleRecord {
+  gid: string;
+  class: string;
+  points: number;
+  source: "node-a" | "node-b";
+  destination: "node-a" | "node-b";
+  sourceTrackId: number | null;
+  sourceConfidence: number | null;
+  sourceDetectedAt: string | null;
+  redTouchedAt: string | null;
+  sourceReleasedAt: string;
+  destinationTrackId: number | null;
+  destinationConfidence: number | null;
+  destinationConfirmedAt: string | null;
+  transactionId: string;
+}
+export interface TrafficTransaction {
+  transactionId: string;
+  sourceKey: "nodeA" | "nodeB";
+  destinationKey: "nodeA" | "nodeB";
+  sourceNode: "node-a" | "node-b";
+  destinationNode: "node-a" | "node-b";
+  batchTotal: number;
+  batchPoints: number;
+  sourceRemaining: number;
+  destinationRemaining: number;
+  releasedVehicles: ReleasedVehicleRecord[];
+  status: "pending_green" | "active" | "source_complete" | "persist_pending" | "complete";
+  createdAt: string;
+  greenStartedAt: string | null;
+  sourceCompletedAt: string | null;
+  completedAt: string | null;
+  persistedAt?: string | null;
+  firestoreUploaded?: boolean;
 }
 export interface SystemStatus {
   status: "online" | "offline" | "initializing";
@@ -54,6 +125,7 @@ export interface SystemStatus {
   cameras?: CameraStatus[];
   nodeA?: TrafficNode;
   nodeB?: TrafficNode;
+  trafficControl?: TrafficControlStatus;
 }
 export interface ModelStatus {
   model: "dual" | "custom" | "coco" | "unavailable";

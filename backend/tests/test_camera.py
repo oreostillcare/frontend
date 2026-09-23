@@ -8,13 +8,19 @@ from camera import CameraWorker
 
 
 class FakeDetector:
-    def __init__(self, config, line, use_coco_fallback=True, model_pool=None):
+    def __init__(self, config, line, use_coco_fallback=True, model_pool=None, vehicle_registry=None):
         self.config = config
         self.line = line
         self.use_coco_fallback = use_coco_fallback
+        self.vehicle_registry = vehicle_registry
         self.model = object()
         self.model_online = True
         self.track_state = SimpleNamespace(passed=12)
+        self.incoming_ledger = Mock()
+        self.incoming_ledger.snapshot.return_value = (
+            [{"gid": "VEH-0001", "class": "car", "detectedAt": "2026-09-14T08:00:00Z", "points": 4}],
+            4,
+        )
 
 
 class StopAfterRetry:
@@ -196,6 +202,11 @@ def test_offline_telemetry_hides_stale_detection_values(worker):
         "visibleVehicles": None,
         "vehiclesPassed": None,
         "classes": {},
+        "incomingVehicles": [],
+        "incomingPoints": None,
+        "totalVehicles": None,
+        "expectedVehicles": None,
+        "vehicleCountState": "OFFLINE",
     }
 
 
@@ -213,6 +224,13 @@ def test_online_telemetry_exposes_current_counts(worker):
     assert payload["visibleVehicles"] == 3
     assert payload["vehiclesPassed"] == 12
     assert payload["classes"] == {"car": 2, "bus": 1}
+    assert payload["incomingVehicles"] == [
+        {"gid": "VEH-0001", "class": "car", "detectedAt": "2026-09-14T08:00:00Z", "points": 4}
+    ]
+    assert payload["incomingPoints"] == 4
+    assert payload["totalVehicles"] == 0
+    assert payload["expectedVehicles"] == 0
+    assert payload["vehicleCountState"] == "CALCULATING"
     assert payload["captureFps"] == 15.0
     assert payload["fps"] == 5.0
 

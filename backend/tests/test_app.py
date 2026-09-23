@@ -24,12 +24,25 @@ class FakeModelPool:
 class FakeCameraWorker:
     instances = []
 
-    def __init__(self, camera_id, source, config, line, model_pool=None):
+    def __init__(
+        self,
+        camera_id,
+        source,
+        config,
+        line,
+        model_pool=None,
+        vehicle_registry=None,
+        detection_handler=None,
+        transaction_state_provider=None,
+    ):
         self.camera_id = camera_id
         self.source = source
         self.config = config
         self.line = line
         self.model_pool = model_pool
+        self.vehicle_registry = vehicle_registry
+        self.detection_handler = detection_handler
+        self.transaction_state_provider = transaction_state_provider
         self.started = False
         self.stopped = False
         self.online = True
@@ -57,6 +70,15 @@ class FakeCameraWorker:
             "visibleVehicles": 3 if self.online else None,
             "vehiclesPassed": 8 if self.online else None,
             "classes": {"car": 2, "bus": 1} if self.online else {},
+            "incomingVehicles": (
+                [{"gid": "VEH-0001", "class": "car", "detectedAt": "2026-09-14T08:00:00Z", "points": 4}]
+                if self.online
+                else []
+            ),
+            "incomingPoints": 4 if self.online else None,
+            "totalVehicles": 1 if self.online else None,
+            "expectedVehicles": 0 if self.online else None,
+            "vehicleCountState": "CALCULATING" if self.online else "OFFLINE",
         }
 
     def frames(self):
@@ -68,6 +90,7 @@ def app_module(monkeypatch):
     FakeCameraWorker.instances = []
     test_settings = SimpleNamespace(
         dv20_camera_index=2,
+        logi_c270_camera_index=2,
         web_camera_index=1,
         camera_1_url="rtsp://camera-a.test/stream1",
         camera_2_url="rtsp://camera-b.test/stream1",
@@ -75,6 +98,12 @@ def app_module(monkeypatch):
         frontend_origins=("http://frontend.test",),
         line=(0, 50, 100, 50),
         line_counting=True,
+        global_id_local_grace_seconds=6.0,
+        global_id_cross_camera_seconds=60.0,
+        global_id_match_threshold=0.55,
+        global_id_ambiguity_margin=0.08,
+        global_id_minimum_sample_confidence=0.45,
+        global_id_maximum_samples=8,
     )
     monkeypatch.setattr(camera_module, "CameraWorker", FakeCameraWorker)
     monkeypatch.setattr(detector_module, "ModelPool", FakeModelPool)
@@ -97,9 +126,10 @@ def client(app_module):
 
 def test_import_starts_two_independent_usb_workers(app_module):
     assert list(app_module.workers) == [1, 2]
-    assert [worker.source for worker in FakeCameraWorker.instances] == [2, 1]
+    assert [worker.source for worker in FakeCameraWorker.instances] == [1, 2]
     assert all(worker.started for worker in FakeCameraWorker.instances)
     assert FakeCameraWorker.instances[0].model_pool is FakeCameraWorker.instances[1].model_pool
+    assert FakeCameraWorker.instances[0].vehicle_registry is FakeCameraWorker.instances[1].vehicle_registry
 
 
 def test_root_redirects_to_local_monitor(client):
@@ -169,6 +199,13 @@ def test_vehicle_count_detail_includes_node_mapping(client):
         "visibleVehicles": 3,
         "vehiclesPassed": 8,
         "classes": {"car": 2, "bus": 1},
+        "incomingVehicles": [
+            {"gid": "VEH-0001", "class": "car", "detectedAt": "2026-09-14T08:00:00Z", "points": 4}
+        ],
+        "incomingPoints": 4,
+        "totalVehicles": 1,
+        "expectedVehicles": 0,
+        "vehicleCountState": "CALCULATING",
     }
 
 

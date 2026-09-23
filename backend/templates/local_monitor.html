@@ -19,6 +19,14 @@
       h1, h2, p { margin: 0; }
       h1 { font-size: 19px; font-weight: 650; letter-spacing: -0.02em; }
       .subtitle { margin-top: 4px; color: #a1a1aa; font-size: 13px; }
+      .header-actions { display: flex; align-items: center; gap: 12px; }
+      .reset-button { border: 1px solid #52525b; border-radius: 8px; padding: 8px 12px; background: #27272a; color: #fafafa; font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+      .reset-button:hover:not(:disabled) { background: #3f3f46; }
+      .test-reset-button { border-color: #7f1d1d; background: #450a0a; color: #fecaca; }
+      .test-reset-button:hover:not(:disabled) { background: #7f1d1d; }
+      .reset-button:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
+      .reset-button:disabled { cursor: not-allowed; opacity: 0.55; }
+      .reset-status { color: #a1a1aa; font-size: 12px; }
       main { padding: 24px 0 40px; }
       .notice { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding: 12px 14px; border: 1px solid #27272a; border-radius: 10px; background: #18181b; color: #d4d4d8; font-size: 13px; }
       .dot { width: 8px; height: 8px; flex: none; border-radius: 999px; background: #22c55e; box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.12); }
@@ -32,6 +40,11 @@
       .camera-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 15px 16px; }
       .camera-title { font-size: 15px; font-weight: 650; }
       .camera-description { margin-top: 4px; color: #a1a1aa; font-size: 12px; }
+      .camera-source-control { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: #a1a1aa; font-size: 11px; }
+      .camera-source-control select { min-width: 168px; border: 1px solid #3f3f46; border-radius: 7px; padding: 6px 28px 6px 9px; background: #18181b; color: #fafafa; font: inherit; font-size: 12px; }
+      .camera-source-control select:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; }
+      .camera-source-control select:disabled { cursor: wait; opacity: 0.65; }
+      .source-message { min-width: 62px; color: #71717a; }
       .badge { min-height: 22px; display: inline-flex; align-items: center; border: 1px solid #3f3f46; border-radius: 999px; padding: 2px 8px; color: #d4d4d8; font-size: 10px; font-weight: 700; white-space: nowrap; }
       .badge.online { border-color: rgba(34, 197, 94, 0.35); background: rgba(34, 197, 94, 0.1); color: #86efac; }
       .badge.offline { border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.1); color: #fca5a5; }
@@ -50,6 +63,8 @@
       }
       @media (max-width: 560px) {
         .header-inner, main { width: min(100% - 20px, 1500px); }
+        .header-inner { flex-wrap: wrap; padding: 12px 0; }
+        .header-actions { width: 100%; justify-content: space-between; flex-wrap: wrap; }
         .summary { grid-template-columns: 1fr 1fr; }
         .metrics, .classes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       }
@@ -62,7 +77,13 @@
           <h1>Local Detection Console</h1>
           <p class="subtitle">Offline-capable YOLO + ByteTrack monitoring</p>
         </div>
-        <span class="badge online">LOCAL SYSTEM</span>
+        <div class="header-actions">
+          <span class="reset-status" id="test-reset-status" role="status" aria-live="polite"></span>
+          <button class="reset-button test-reset-button" id="reset-test-state" type="button" title="Verify both ESP32 signals RED, then clear all test detection state">Both RED + clear test</button>
+          <span class="reset-status" id="reset-status" role="status" aria-live="polite">{% if not reset_available %}Use backend/run_local.py to enable reset{% endif %}</span>
+          <button class="reset-button" id="reset-system" type="button" {% if not reset_available %}disabled{% endif %} title="Restart Flask and Next.js, and clear in-memory camera and detection state">Reset system</button>
+          <span class="badge online">LOCAL SYSTEM</span>
+        </div>
       </div>
     </header>
     <main>
@@ -84,6 +105,15 @@
             <div>
               <h2 class="camera-title">Camera {{ "A" if camera_id == 1 else "B" }} / Lane {{ "A" if camera_id == 1 else "B" }}</h2>
               <p class="camera-description">Independent USB camera, detector tracking, counting, and telemetry</p>
+              <label class="camera-source-control" for="camera-{{ camera_id }}-source">
+                <span>Camera source</span>
+                <select id="camera-{{ camera_id }}-source" data-camera-id="{{ camera_id }}">
+                  {% for device in camera_devices %}
+                  <option value="{{ device.index }}" {% if camera_sources[camera_id] == device.index %}selected{% endif %}>{{ device.name }}</option>
+                  {% endfor %}
+                </select>
+                <span class="source-message" id="camera-{{ camera_id }}-source-message" aria-live="polite"></span>
+              </label>
             </div>
             <span class="badge" id="camera-{{ camera_id }}-status">CONNECTING</span>
           </div>
@@ -104,6 +134,7 @@
     </main>
     <script>
       const vehicleClasses = ["car", "motorcycle", "truck", "bus", "bicycle", "ebike", "jeepney", "tricycle"];
+      const testResetToken = {{ test_reset_token | tojson }};
       const value = (item) => item === null || item === undefined ? "--" : item;
 
       function renderCamera(camera) {
@@ -117,9 +148,120 @@
         document.getElementById(`camera-${camera.id}-visible`).textContent = value(camera.visibleVehicles);
         document.getElementById(`camera-${camera.id}-frame-age`).textContent = camera.frameAgeMs == null ? "--" : `${camera.frameAgeMs} ms`;
         document.getElementById(`camera-${camera.id}-processing`).textContent = camera.processingMs == null ? "--" : `${camera.processingMs} ms`;
+        const sourceSelect = document.getElementById(`camera-${camera.id}-source`);
+        const sourceMessage = document.getElementById(`camera-${camera.id}-source-message`);
+        if (camera.sourceIndex !== null && sourceSelect.dataset.switching !== "true") {
+          sourceSelect.value = String(camera.sourceIndex);
+          sourceMessage.textContent = camera.sourceName;
+        }
         document.getElementById(`camera-${camera.id}-classes`).innerHTML = vehicleClasses
           .map((name) => `<div class="class-item"><span>${name}</span><span class="class-count">${value(camera.classes?.[name])}</span></div>`)
           .join("");
+      }
+
+      function reloadCameraFeeds() {
+        document.querySelectorAll(".feed img").forEach((image) => {
+          image.src = `/video/camera/${image.dataset.cameraId}?source=${Date.now()}`;
+        });
+      }
+
+      async function resetTestState() {
+        const confirmed = window.confirm(
+          "Set both Node A and Node B to RED and clear all counts, temporary IDs, GIDs, and transactions?"
+        );
+        if (!confirmed) return;
+
+        const button = document.getElementById("reset-test-state");
+        const status = document.getElementById("test-reset-status");
+        button.disabled = true;
+        status.textContent = "Verifying both RED...";
+
+        try {
+          const response = await fetch("/api/local/reset-test-state", {
+            method: "POST",
+            headers: { "X-Test-Reset-Token": testResetToken },
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || "Test reset failed");
+          result.cameras.forEach(renderCamera);
+          reloadCameraFeeds();
+          status.textContent = "Neutral: both RED; counts and IDs cleared";
+          window.setTimeout(() => {
+            if (!button.disabled) status.textContent = "";
+          }, 5000);
+        } catch (error) {
+          status.textContent = error instanceof Error ? error.message : "Test reset failed";
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      async function resetSystem() {
+        const pin = window.prompt("Enter the reset PIN printed by backend/run_local.py:");
+        if (pin === null || !pin.trim()) return;
+
+        const button = document.getElementById("reset-system");
+        const status = document.getElementById("reset-status");
+        button.disabled = true;
+        status.textContent = "Requesting reset...";
+
+        try {
+          const response = await fetch("/api/local/reset", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pin: pin.trim() }),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || "Reset request failed");
+          status.textContent = "Restarting cameras, ESP32 control, and dashboard...";
+
+          for (let attempt = 0; attempt < 60; attempt++) {
+            await new Promise((resolve) => window.setTimeout(resolve, 1500));
+            try {
+              const runtimeResponse = await fetch("/api/local/runtime", { cache: "no-store" });
+              if (!runtimeResponse.ok) continue;
+              const runtime = await runtimeResponse.json();
+              if (runtime.runtimeId !== result.runtimeId) {
+                window.location.reload();
+                return;
+              }
+            } catch {
+              // Both services briefly go offline during a successful restart.
+            }
+          }
+          throw new Error("Restart timed out. Check the launcher terminal.");
+        } catch (error) {
+          status.textContent = error instanceof Error ? error.message : "Reset failed";
+          button.disabled = false;
+        }
+      }
+
+      async function changeCameraSource(event) {
+        const select = event.currentTarget;
+        const cameraId = select.dataset.cameraId;
+        const sourceMessage = document.getElementById(`camera-${cameraId}-source-message`);
+        select.disabled = true;
+        select.dataset.switching = "true";
+        sourceMessage.textContent = "Switching...";
+
+        try {
+          const response = await fetch(`/api/cameras/${cameraId}/source`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sourceIndex: Number(select.value) }),
+          });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error || "Unable to switch camera");
+          select.dataset.switching = "false";
+          payload.cameras.forEach(renderCamera);
+          reloadCameraFeeds();
+        } catch (error) {
+          select.dataset.switching = "false";
+          sourceMessage.textContent = error instanceof Error ? error.message : "Switch failed";
+          await refresh();
+        } finally {
+          select.disabled = false;
+        }
       }
 
       async function refresh() {
@@ -146,6 +288,11 @@
           window.setTimeout(() => { image.src = `/video/camera/${cameraId}?retry=${Date.now()}`; }, 2000);
         });
       });
+      document.querySelectorAll(".camera-source-control select").forEach((select) => {
+        select.addEventListener("change", changeCameraSource);
+      });
+      document.getElementById("reset-test-state").addEventListener("click", resetTestState);
+      document.getElementById("reset-system").addEventListener("click", resetSystem);
 
       refresh();
       window.setInterval(refresh, 1500);

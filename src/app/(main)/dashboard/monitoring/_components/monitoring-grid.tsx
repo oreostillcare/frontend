@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,17 +10,32 @@ import type { CameraStatus } from "@/lib/api/types";
 
 function CameraCard({ camera, id }: { camera?: CameraStatus; id: number }) {
   const [streamError, setStreamError] = useState(false);
+  const [streamAttempt, setStreamAttempt] = useState(0);
   const mirror = id === 2 && camera?.testMirror;
   const url = videoUrl(id);
-  let status: "LIVE" | "OFFLINE" | "TEST MIRROR" = "OFFLINE";
+  const cameraOnline = Boolean(camera?.online);
+  let status: "LIVE" | "OFFLINE" | "RETRYING" | "TEST MIRROR" = "OFFLINE";
   let statusVariant: "secondary" | "destructive" | "outline" = "destructive";
   if (mirror) {
     status = "TEST MIRROR";
     statusVariant = "outline";
-  } else if (camera?.online) {
+  } else if (cameraOnline && streamError) {
+    status = "RETRYING";
+    statusVariant = "outline";
+  } else if (cameraOnline) {
     status = "LIVE";
     statusVariant = "secondary";
   }
+
+  useEffect(() => {
+    if (!streamError || !cameraOnline) return;
+    const retryTimer = window.setTimeout(() => {
+      setStreamAttempt((attempt) => attempt + 1);
+      setStreamError(false);
+    }, 2000);
+    return () => window.clearTimeout(retryTimer);
+  }, [cameraOnline, streamError]);
+
   return (
     <Card>
       <CardHeader>
@@ -35,11 +50,11 @@ function CameraCard({ camera, id }: { camera?: CameraStatus; id: number }) {
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        {url && !streamError ? (
+        {cameraOnline && !streamError ? (
           <div className="aspect-video overflow-hidden rounded-lg bg-muted">
             <img
               className="size-full object-contain"
-              src={url}
+              src={`${url}?attempt=${streamAttempt}`}
               alt={`Processed traffic feed for Camera ${id}`}
               onError={() => setStreamError(true)}
             />
@@ -47,11 +62,11 @@ function CameraCard({ camera, id }: { camera?: CameraStatus; id: number }) {
         ) : (
           <Empty className="aspect-video">
             <EmptyHeader>
-              <EmptyTitle>Camera offline</EmptyTitle>
+              <EmptyTitle>{cameraOnline ? "Stream reconnecting" : "Camera offline"}</EmptyTitle>
               <EmptyDescription>
-                {url
-                  ? "The stream could not be reached. Telemetry will continue reconnecting."
-                  : "Backend URL is not configured."}
+                {cameraOnline
+                  ? "The stream is reconnecting automatically."
+                  : "The camera or detection backend is currently unavailable."}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>

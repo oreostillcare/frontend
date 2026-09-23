@@ -5,7 +5,8 @@ from collections import Counter
 import cv2
 
 from config import Settings, mask_rtsp_url
-from detector import Detector, ModelPool, VEHICLE_CLASSES
+from detector import Detector, ModelPool, VEHICLE_CLASSES, draw_annotation_text
+from vehicle_identity import GlobalVehicleRegistry
 
 
 class CameraWorker:
@@ -18,11 +19,22 @@ class CameraWorker:
         config: Settings,
         line: tuple[int, int, int, int],
         model_pool: ModelPool | None = None,
+        vehicle_registry: GlobalVehicleRegistry | None = None,
+        detection_handler=None,
+        transaction_state_provider=None,
     ):
         self.camera_id = camera_id
         self.source = source
         self.config = config
-        self.detector = Detector(config, line, model_pool=model_pool)
+        self.detector = Detector(
+            config,
+            line,
+            model_pool=model_pool,
+            vehicle_registry=vehicle_registry,
+        )
+        self.detector.camera_id = camera_id
+        self.detection_handler = detection_handler
+        self.transaction_state_provider = transaction_state_provider
 
         self._stop = threading.Event()
         self._capture_thread: threading.Thread | None = None
@@ -44,6 +56,9 @@ class CameraWorker:
         self.frame_age_ms: float | None = None
         self.visible = 0
         self.classes: dict[str, int] = {}
+        self.total_vehicles = 0
+        self.expected_vehicles = 0
+        self.vehicle_count_state = "CALCULATING"
         self.error: str | None = None
 
     def start(self) -> None:
@@ -73,6 +88,12 @@ class CameraWorker:
         with self._jpeg_condition:
             self._jpeg_condition.notify_all()
 
+    def wait_until_stopped(self, timeout: float = 2.0) -> None:
+        current_thread = threading.current_thread()
+        for worker_thread in (self._capture_thread, self._processing_thread):
+            if worker_thread and worker_thread is not current_thread:
+                worker_thread.join(timeout=timeout)
+
     @staticmethod
     def _smoothed_fps(previous: float, instant: float) -> float:
         value = instant if previous <= 0 else (previous * 0.8) + (instant * 0.2)
@@ -92,7 +113,7 @@ class CameraWorker:
 
         # Camera Source = USB Cameras
         # DirectShow indices correspond to the Windows friendly-name order used
-        # to configure DV20 USB CAMERA and Web Camera.
+        # to configure Logi C270 HD WebCam and Web Camera.
         return cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
 
     def _capture_errors(self) -> tuple[str, str]:
@@ -128,6 +149,7 @@ class CameraWorker:
             try:
                 capture = self._open_capture()
                 capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                capture.set(cv2.CAP_PROP_FPS, max(1, getattr(self.config, "camera_capture_fps", 60)))
 
                 if not capture.isOpened():
                     self._mark_offline(unavailable_error)
@@ -190,6 +212,12 @@ class CameraWorker:
 
             started_at = time.perf_counter()
             annotated, detections = self.detector.process(frame)
+            if self.detection_handler is not None:
+                try:
+                    self.detection_handler(self.camera_id, detections)
+                except Exception as error:
+                    self.error = f"Traffic transaction event error: {error}"
+            self._draw_transaction_counts(annotated)
             encoded, jpeg = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 82])
             completed_at = time.perf_counter()
 
@@ -199,8 +227,9 @@ class CameraWorker:
                     self._jpeg_version += 1
                     self._jpeg_condition.notify_all()
 
-            self.visible = len({item["trackId"] for item in detections})
-            counts = Counter(item["class"] for item in detections)
+            zone_detections = [item for item in detections if item.get("inTrafficZone")]
+            self.visible = len({item["trackId"] for item in zone_detections})
+            counts = Counter(item["class"] for item in zone_detections)
             self.classes = {name: counts.get(name, 0) for name in sorted(VEHICLE_CLASSES)}
             self.processing_ms = round((completed_at - started_at) * 1000, 1)
             self.frame_age_ms = round((completed_at - captured_at) * 1000, 1)
@@ -215,6 +244,53 @@ class CameraWorker:
             # iteration instead of holding a frame during the wait.
             processing_time = completed_at - started_at
             self._stop.wait(max(0, interval - processing_time))
+
+    def _draw_transaction_counts(self, frame) -> None:
+        incoming_ledger = getattr(self.detector, "incoming_ledger", None)
+        incoming_vehicles, _ = incoming_ledger.snapshot() if incoming_ledger else ([], 0)
+        live_total = len(incoming_vehicles)
+        total_vehicles = live_total
+        expected_vehicles = 0
+        count_state = "CALCULATING"
+        node_key = "nodeA" if self.camera_id == 1 else "nodeB"
+
+        transaction = None
+        if self.transaction_state_provider is not None:
+            try:
+                state = self.transaction_state_provider()
+                transaction = state.get("active") if state else None
+                if transaction is None and state:
+                    excluded_gids = set(
+                        state.get("nextBatchExcludedGids", {}).get(node_key, [])
+                    )
+                    total_vehicles = sum(
+                        str(vehicle.get("gid") or "").strip() not in excluded_gids
+                        for vehicle in incoming_vehicles
+                    )
+            except Exception as error:
+                self.error = f"Traffic display state error: {error}"
+
+        if transaction is not None:
+            if transaction["sourceKey"] == node_key:
+                total_vehicles = transaction["sourceRemaining"]
+                count_state = "LOCKED BATCH"
+            elif transaction["destinationKey"] == node_key:
+                expected_vehicles = transaction["destinationRemaining"]
+                count_state = "EXPECTING"
+
+        self.total_vehicles = total_vehicles
+        self.expected_vehicles = expected_vehicles
+        self.vehicle_count_state = count_state
+        draw_annotation_text(
+            frame,
+            (
+                f"TOTAL VEHICLES: {total_vehicles}  "
+                f"EXPECTED VEHICLES: {expected_vehicles}  {count_state}"
+            ),
+            (12, 52),
+            0.56,
+            2,
+        )
 
     def frames(self):
         last_version = -1
@@ -236,6 +312,10 @@ class CameraWorker:
 
     def telemetry(self) -> dict:
         passed = self.detector.track_state.passed if self.online and self.config.line_counting else None
+        incoming_ledger = getattr(self.detector, "incoming_ledger", None)
+        incoming_vehicles, incoming_points = (
+            incoming_ledger.snapshot() if self.online and incoming_ledger else ([], None)
+        )
         return {
             "id": self.camera_id,
             "configured": self._source_is_configured(self.source),
@@ -250,4 +330,9 @@ class CameraWorker:
             "visibleVehicles": self.visible if self.online else None,
             "vehiclesPassed": passed,
             "classes": self.classes if self.online else {},
+            "incomingVehicles": incoming_vehicles,
+            "incomingPoints": incoming_points,
+            "totalVehicles": self.total_vehicles if self.online else None,
+            "expectedVehicles": self.expected_vehicles if self.online else None,
+            "vehicleCountState": self.vehicle_count_state if self.online else "OFFLINE",
         }

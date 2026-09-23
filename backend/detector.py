@@ -7,7 +7,9 @@ from typing import Any
 import cv2
 
 from config import Settings
-from tracking import TrackState
+from scoring import IncomingVehicleLedger
+from tracking import INCOMING, OUTGOING, TrackState, TrafficRegion
+from vehicle_identity import GlobalVehicleRegistry
 
 LOCAL_VEHICLES = {"tricycle", "jeepney", "ebike"}
 COCO_VEHICLES = {"car", "motorcycle", "truck", "bicycle", "bus"}
@@ -15,6 +17,156 @@ VEHICLE_CLASSES = LOCAL_VEHICLES | COCO_VEHICLES
 COCO_TRACK_ID_OFFSET = 1_000_000
 CLASS_LOCK_OBSERVATIONS = 5
 CLASS_LOCK_MIN_VOTES = 3
+GUIDE_LINE_THICKNESS = 3
+ANNOTATION_TEXT_COLOR = (0, 0, 0)
+ANNOTATION_FONT = cv2.FONT_HERSHEY_DUPLEX
+VEHICLE_LABEL_SCALE = 0.44
+VEHICLE_LABEL_THICKNESS = 1
+VEHICLE_LABEL_GAP = 4
+VEHICLE_TRAIL_COLOR = (70, 220, 70)
+VEHICLE_TRAIL_THICKNESS = 2
+VEHICLE_TRAIL_POINTS = 20
+
+
+def draw_annotation_text(
+    frame,
+    text: str,
+    origin: tuple[int, int],
+    font_scale: float,
+    thickness: int,
+) -> None:
+    cv2.putText(
+        frame,
+        text,
+        origin,
+        ANNOTATION_FONT,
+        font_scale,
+        ANNOTATION_TEXT_COLOR,
+        thickness,
+        cv2.LINE_AA,
+    )
+
+
+def vehicle_label_lines(item: dict) -> tuple[str, ...]:
+    role = item.get("trafficRole")
+    role_label = "I" if role == INCOMING else "O" if role == OUTGOING else "--"
+    temporary_id = item["trackId"] % COCO_TRACK_ID_OFFSET
+    if role == OUTGOING:
+        lines = (
+            f"{item['class'].upper()}  {role_label}  {item['confidence']:.2f}",
+            f"TID:{temporary_id}",
+        )
+        return (*lines, "RED: CROSSED") if item.get("redCrossed") or item.get("redLineTouched") else lines
+
+    vehicle_id = item.get("vehicleId")
+    if vehicle_id is None:
+        pending_reasons = {
+            "NO_CONFIRMED_DEPARTURE": "PENDING-NORED",
+            "AMBIGUOUS_OR_LOW_MATCH": "PENDING-LOW",
+        }
+        vehicle_id = pending_reasons.get(item.get("globalIdPendingReason"), "PENDING")
+    lines = (
+        f"{item['class'].upper()}  {role_label}  {item['confidence']:.2f}",
+        f"TID:{temporary_id}  GID:{vehicle_id}",
+    )
+    return (*lines, "RED: CROSSED") if item.get("redCrossed") or item.get("redLineTouched") else lines
+
+
+def draw_vehicle_label(frame, item: dict) -> None:
+    if not hasattr(frame, "shape") or len(frame.shape) < 2:
+        return
+    x1, y1, _, _ = item["boundingBox"]
+    lines = vehicle_label_lines(item)
+    measurements = [
+        cv2.getTextSize(line, ANNOTATION_FONT, VEHICLE_LABEL_SCALE, VEHICLE_LABEL_THICKNESS)[0]
+        for line in lines
+    ]
+    frame_height, frame_width = frame.shape[:2]
+    line_height = max(height for _, height in measurements)
+    line_step = line_height + VEHICLE_LABEL_GAP
+    first_baseline = y1 - 5 - ((len(lines) - 1) * line_step)
+    if first_baseline - line_height < 2:
+        first_baseline = y1 + line_height + 5
+    last_allowed_baseline = frame_height - 2 - ((len(lines) - 1) * line_step)
+    first_baseline = max(line_height + 2, min(first_baseline, last_allowed_baseline))
+
+    for index, (line, (text_width, _)) in enumerate(zip(lines, measurements, strict=True)):
+        text_x = max(2, min(x1, frame_width - text_width - 2))
+        text_y = first_baseline + index * line_step
+        draw_annotation_text(
+            frame,
+            line,
+            (text_x, text_y),
+            VEHICLE_LABEL_SCALE,
+            VEHICLE_LABEL_THICKNESS,
+        )
+
+
+def draw_vehicle_trail(frame, points) -> None:
+    trail = list(points)[-VEHICLE_TRAIL_POINTS:]
+    if len(trail) < 2:
+        return
+    for start, end in zip(trail, trail[1:]):
+        cv2.line(
+            frame,
+            tuple(start),
+            tuple(end),
+            VEHICLE_TRAIL_COLOR,
+            VEHICLE_TRAIL_THICKNESS,
+            cv2.LINE_AA,
+        )
+
+
+def _guide_y_percent(config: Settings | None, camera_id: int | None, color: str, default: float) -> float:
+    shared = getattr(config, f"guide_{color}_y_percent", default)
+    camera_override = getattr(config, f"camera_{camera_id}_guide_{color}_y_percent", None)
+    percentage = shared if camera_override is None else camera_override
+    return min(100.0, max(0.0, percentage))
+
+
+def camera_traffic_region(
+    frame,
+    config: Settings | None,
+    camera_id: int | None = None,
+) -> TrafficRegion | None:
+    if not hasattr(frame, "shape"):
+        return None
+    height, width = frame.shape[:2]
+    if height <= 0 or width <= 0:
+        return None
+
+    green_y = min(height - 1, round(height * _guide_y_percent(config, camera_id, "green", 15.0) / 100))
+    red_y = min(height - 1, round(height * _guide_y_percent(config, camera_id, "red", 80.0) / 100))
+    green_y, red_y = sorted((green_y, red_y))
+    return TrafficRegion(
+        green_y=green_y,
+        red_y=red_y,
+        motion_deadband=max(1, getattr(config, "direction_motion_deadband_pixels", 4)),
+        motion_window=max(1, getattr(config, "direction_motion_window_frames", 5)),
+        reversal_distance=max(
+            5,
+            getattr(config, "direction_reversal_min_distance_pixels", 24),
+        ),
+        outgoing_route_completion_percent=min(
+            100.0,
+            max(0.0, getattr(config, "outgoing_route_completion_percent", 50.0)),
+        ),
+    )
+
+
+def draw_camera_guides(
+    frame,
+    config: Settings | None,
+    camera_id: int | None = None,
+) -> TrafficRegion | None:
+    """Draw percentage-based lane guides and return their pixel region."""
+    region = camera_traffic_region(frame, config, camera_id)
+    if region is None:
+        return None
+    _, width = frame.shape[:2]
+    cv2.line(frame, (0, region.green_y), (width - 1, region.green_y), (0, 255, 0), GUIDE_LINE_THICKNESS)
+    cv2.line(frame, (0, region.red_y), (width - 1, region.red_y), (0, 0, 255), GUIDE_LINE_THICKNESS)
+    return region
 
 
 @dataclass(frozen=True)
@@ -126,9 +278,13 @@ class Detector:
         use_coco_fallback: bool = True,
         use_custom_model: bool = True,
         model_pool: ModelPool | None = None,
+        vehicle_registry: GlobalVehicleRegistry | None = None,
     ):
         self.config = config
+        self.camera_id: int | None = None
         self.track_state = TrackState(line, config.line_counting)
+        self.vehicle_registry = vehicle_registry
+        self.incoming_ledger = IncomingVehicleLedger()
         self.use_coco_fallback = use_coco_fallback
         self.use_custom_model = use_custom_model
         self.class_history: dict[int, deque[str]] = defaultdict(lambda: deque(maxlen=CLASS_LOCK_OBSERVATIONS))
@@ -239,7 +395,13 @@ class Detector:
             self.class_last_seen.pop(track_id, None)
 
     def process(self, frame):
+        incoming_ledger = getattr(self, "incoming_ledger", None)
+        if incoming_ledger is None:
+            incoming_ledger = IncomingVehicleLedger()
+            self.incoming_ledger = incoming_ledger
         if self.local_session is None and self.coco_session is None:
+            incoming_ledger.update([])
+            draw_camera_guides(frame, getattr(self, "config", None), getattr(self, "camera_id", None))
             return frame, []
         self.frame_index += 1
 
@@ -267,30 +429,39 @@ class Detector:
             )
 
         self.stabilize_classes(detections)
+        region = camera_traffic_region(frame, self.config, getattr(self, "camera_id", None))
+        if region is None:
+            self.track_state.update(detections)
+        else:
+            self.track_state.update(detections, region)
+        vehicle_registry = getattr(self, "vehicle_registry", None)
+        if vehicle_registry is not None and self.camera_id is not None:
+            vehicle_registry.assign(self.camera_id, detections, frame)
+        incoming_ledger.update(detections)
+        draw_camera_guides(frame, self.config, getattr(self, "camera_id", None))
         for item in detections:
             x1, y1, x2, y2 = item["boundingBox"]
-            name = item["class"]
             track_id = item["trackId"]
-            confidence = item["confidence"]
             color = (255, 120, 40) if track_id < COCO_TRACK_ID_OFFSET else (70, 180, 90)
+            track_history = getattr(self.track_state, "history", {})
+            draw_vehicle_trail(frame, track_history.get(track_id, ()))
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(
-                frame,
-                f"{name} #{track_id % COCO_TRACK_ID_OFFSET} {confidence:.2f}",
-                (x1, max(18, y1 - 5)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.48,
-                (255, 255, 255),
-                1,
-                cv2.LINE_AA,
-            )
+            draw_vehicle_label(frame, item)
 
-        self.track_state.update(detections)
-        x1, y1, x2, y2 = self.track_state.line
-        if self.config.line_counting:
-            cv2.line(frame, (x1, y1), (x2, y2), (0, 190, 255), 2)
-        overlay = f"VISIBLE: {len({item['trackId'] for item in detections})}"
+        zone_visible = len({item["trackId"] for item in detections if item.get("inTrafficZone")})
+        incoming = sum(item.get("trafficRole") == INCOMING for item in detections)
+        outgoing = sum(item.get("trafficRole") == OUTGOING for item in detections)
+        overlay = (
+            f"ZONE: {zone_visible}  IN: {incoming}  OUT: {outgoing}"
+            f"  POINTS: {incoming_ledger.total_points}"
+        )
         if self.config.line_counting:
             overlay += f"  PASSED: {self.track_state.passed}"
-        cv2.putText(frame, overlay, (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (255, 255, 255), 2, cv2.LINE_AA)
+        draw_annotation_text(
+            frame,
+            overlay,
+            (12, 26),
+            0.62,
+            2,
+        )
         return frame, detections

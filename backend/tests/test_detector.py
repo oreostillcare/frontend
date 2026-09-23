@@ -17,6 +17,9 @@ from detector import (
     ModelPool,
     ModelSession,
     box_iou,
+    draw_annotation_text,
+    draw_vehicle_trail,
+    vehicle_label_lines,
 )
 
 
@@ -101,6 +104,65 @@ def test_active_vehicle_classes_exclude_etrike_and_unrelated_coco_classes():
 )
 def test_box_iou_boundaries(first, second, expected):
     assert box_iou(first, second) == pytest.approx(expected)
+
+
+def test_annotation_text_draws_cyan_without_outline(monkeypatch):
+    put_text = Mock()
+    monkeypatch.setattr(detector_module.cv2, "putText", put_text)
+    frame = object()
+
+    draw_annotation_text(frame, "GID:VEH-0001", (10, 20), 0.5, 1)
+
+    put_text.assert_called_once()
+    assert put_text.call_args.args[5:7] == ((255, 255, 0), 1)
+
+
+def test_vehicle_trail_connects_centroid_history(monkeypatch):
+    draw_line = Mock()
+    monkeypatch.setattr(detector_module.cv2, "line", draw_line)
+
+    draw_vehicle_trail(object(), [(10, 10), (12, 20), (14, 30)])
+
+    assert draw_line.call_count == 2
+    assert draw_line.call_args_list[0].args[1:3] == ((10, 10), (12, 20))
+    assert draw_line.call_args_list[1].args[1:3] == ((12, 20), (14, 30))
+
+
+def test_vehicle_label_separates_detection_details_into_two_lines():
+    item = {
+        "trackId": COCO_TRACK_ID_OFFSET + 39,
+        "class": "car",
+        "confidence": 0.639,
+        "trafficRole": "INCOMING",
+        "vehicleId": "VEH-0001",
+    }
+
+    assert vehicle_label_lines(item) == ("CAR  I  0.64", "TID:39  GID:VEH-0001")
+
+
+def test_outgoing_vehicle_label_does_not_show_gid():
+    item = {
+        "trackId": 39,
+        "class": "car",
+        "confidence": 0.639,
+        "trafficRole": "OUTGOING",
+        "vehicleId": None,
+    }
+
+    assert vehicle_label_lines(item) == ("CAR  O  0.64", "TID:39")
+
+
+def test_vehicle_label_reports_completed_red_crossing():
+    item = {
+        "trackId": 39,
+        "class": "car",
+        "confidence": 0.639,
+        "trafficRole": "INCOMING",
+        "vehicleId": "VEH-0001",
+        "redCrossed": True,
+    }
+
+    assert vehicle_label_lines(item)[2] == "RED: CROSSED"
 
 
 def test_class_stabilization_uses_running_majority_then_locks():

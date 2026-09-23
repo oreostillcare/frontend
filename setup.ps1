@@ -174,8 +174,8 @@ try {
   Write-Host ""
   Write-Host "Setup complete."
   Write-Host "1. Fill in .env.local and backend/.env with your local values."
-  Write-Host "2. Start the backend from its directory: cd backend; .\.venv\Scripts\python.exe app.py"
-  Write-Host "3. In another terminal at the repository root, start the frontend: npm.cmd run dev"
+  Write-Host "2. For the /local Reset system button, start both services from the repository root: .\backend\.venv\Scripts\python.exe .\backend\run_local.py"
+  Write-Host "3. Or start them separately: cd backend; .\.venv\Scripts\python.exe app.py, then npm.cmd run dev in another terminal (reset button disabled)."
   if (-not $DownloadDatasets) {
     Write-Host "Datasets were not downloaded. After configuring private URLs, run .\setup.ps1 -DownloadDatasets or .\backend\scripts\download_datasets.ps1."
   }

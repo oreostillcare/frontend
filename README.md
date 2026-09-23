@@ -52,6 +52,16 @@ The backend starts detection immediately; opening a browser does not create the 
 http://127.0.0.1:5000/local
 ```
 
+For the **Reset system** button on `/local`, stop any separately running Flask and Next.js terminals, then start both services through the Windows launcher from the repository root:
+
+```powershell
+.\backend\.venv\Scripts\python.exe .\backend\run_local.py
+```
+
+The launcher runs `app.py` and `npm.cmd run dev`, prints a reset PIN in its terminal, and restarts only the processes it started when the PIN is entered on `/local`. Restarting clears in-memory detection, tracking, counting, and traffic-control state. The backend requests both ESP32 signals RED before the restart; each ESP32's own watchdog remains the hardware-side fallback. If the two services were started separately, the button is disabled because their processes cannot be safely identified and restarted by the page.
+
+The `/local` console also provides **Both RED + clear test** for repeated toy-vehicle trials. It works without the launcher: both ESP32 nodes must confirm RED before the backend recreates both detector/tracker workers and clears live counts, temporary track IDs, global vehicle IDs, transaction batches, and controller totals. It does not erase historical records already saved to Firestore. Remove the toy vehicles from both traffic zones before resetting, then place and move them for the next test; any vehicle still visible to YOLO can be detected again immediately after the reset.
+
 Camera capture continuously drains the laptop webcam into a one-frame overwrite buffer. YOLO always takes the newest available frame, so inference that runs slower than the camera drops stale frames instead of accumulating latency. `frameAgeMs` and `processingMs` are exposed in local telemetry for latency diagnosis. The RTSP URL, authentication, FFmpeg connection, reconnection, and masked-error path remain in the backend under `RTSP - FOR FUTURE USE`.
 
 While the laptop webcam is active, the Flask console and Next.js monitoring page render Camera A twice. Camera B is explicitly labeled `TEST MIRROR`; both MJPEG endpoints share Camera A's single capture, YOLO, ByteTrack, and latest JPEG buffer. This avoids opening the laptop webcam twice. `TEST_SINGLE_CAMERA_MODE` and the second physical worker remain available for the future RTSP mode.
