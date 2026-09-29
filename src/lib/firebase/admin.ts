@@ -8,7 +8,13 @@ function getAdminApp() {
   const existingApp = getApps()[0];
   if (existingApp) return existingApp;
 
-  const projectId = process.env.FIREBASE_ADMIN_PROJECT_ID;
+  const usingEmulators = Boolean(process.env.FIREBASE_AUTH_EMULATOR_HOST || process.env.FIRESTORE_EMULATOR_HOST);
+  const projectId = process.env.FIREBASE_ADMIN_PROJECT_ID || process.env.GCLOUD_PROJECT;
+  if (usingEmulators) {
+    if (!projectId) throw new Error("Firebase emulator configuration error: missing project ID.");
+    return initializeApp({ projectId });
+  }
+
   const clientEmail = process.env.FIREBASE_ADMIN_CLIENT_EMAIL;
   const privateKey = process.env.FIREBASE_ADMIN_PRIVATE_KEY?.replace(/\\n/g, "\n");
 

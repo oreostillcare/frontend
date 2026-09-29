@@ -2,6 +2,7 @@
 
 import { deleteApp, FirebaseError, initializeApp } from "firebase/app";
 import {
+  connectAuthEmulator,
   createUserWithEmailAndPassword,
   deleteUser,
   getAuth,
@@ -13,7 +14,7 @@ import {
   type User,
 } from "firebase/auth";
 
-import { auth, firebaseConfig, isFirebaseConfigured } from "./client";
+import { auth, firebaseConfig, firebaseEmulatorSettings, isFirebaseConfigured } from "./client";
 
 let verificationAppSequence = 0;
 
@@ -64,6 +65,11 @@ export async function createPendingVerifiedAccount(email: string, temporaryPassw
     `smartroad-email-verification-${Date.now()}-${verificationAppSequence}`,
   );
   const secondaryAuth = getAuth(secondaryApp);
+  if (firebaseEmulatorSettings) {
+    connectAuthEmulator(secondaryAuth, `http://${firebaseEmulatorSettings.host}:${firebaseEmulatorSettings.authPort}`, {
+      disableWarnings: true,
+    });
+  }
   let pendingUser: User | null = null;
 
   try {

@@ -30,6 +30,29 @@ npm run dev
 
 If PowerShell blocks `npm.ps1`, use `npm.cmd ci` and `npm.cmd run dev`. Copy `.env.example` to `.env.local` and configure Firebase plus `NEXT_PUBLIC_BACKEND_URL`. Never commit `.env.local`.
 
+## Firebase emulator integration tests
+
+The regular Playwright suite uses mocked Firebase responses so it stays fast and deterministic. Run the separate
+emulator suite to verify Firebase Authentication, Firestore reads, Admin SDK token verification, staff profile loading,
+and `firestore.rules` without touching a hosted Firebase project:
+
+```powershell
+npm.cmd run test:firebase
+```
+
+This command starts isolated Auth and Firestore emulators under the `demo-smartroad` project, validates the security
+rules, seeds an administrator account, runs the real login and staff-data browser flow, and stops the emulators. Java
+17 is supported by the project-pinned Firebase CLI. Keep `firebase-tools` on the v14 line unless the development
+machines are upgraded to Java 21, which is required by Firebase CLI v15.
+
+For manual inspection, keep the emulators running with:
+
+```powershell
+npm.cmd run firebase:emulators
+```
+
+The Emulator Suite UI is available at `http://127.0.0.1:4000` while this manual command is running.
+
 For staff verification emails, set `APP_BASE_URL` to the exact SmartRoad origin and add that hostname to Firebase
 Authentication > Settings > Authorized domains. Production deployments also need a random `CRON_SECRET` (at least
 16 characters) so Vercel can securely run the daily archived-invitation cleanup.
