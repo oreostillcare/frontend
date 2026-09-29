@@ -360,11 +360,16 @@ class GlobalVehicleRegistry:
             similarity = multi_sample_similarity(descriptor, observation.descriptors)
             if similarity is None:
                 continue
-            diagonal = max(1.0, frame_diagonal, observation.frame_diagonal)
-            distance = math.dist(center, observation.center) / diagonal
-            if distance > 0.3:
-                continue
-            position_score = 1.0 - (distance / 0.3)
+            if frame_diagonal > 1.0 and observation.frame_diagonal > 1.0:
+                diagonal = max(frame_diagonal, observation.frame_diagonal)
+                distance = math.dist(center, observation.center) / diagonal
+                if distance > 0.3:
+                    continue
+                position_score = 1.0 - (distance / 0.3)
+            else:
+                # Synthetic frames used by offline callers may not expose image
+                # dimensions, so appearance and class carry the match instead.
+                position_score = 0.5
             shape_score = shape_similarity(
                 bounding_box_aspect_ratio(detection["boundingBox"]),
                 observation.aspect_ratios,

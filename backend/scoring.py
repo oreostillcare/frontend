@@ -59,7 +59,10 @@ class IncomingVehicleLedger:
     @property
     def records(self) -> list[dict]:
         records, _ = self.snapshot()
-        return records
+        return [
+            {key: record[key] for key in ("gid", "class", "detectedAt", "points")}
+            for record in records
+        ]
 
     @property
     def total_points(self) -> int:
