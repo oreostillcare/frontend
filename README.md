@@ -40,6 +40,13 @@ and `firestore.rules` without touching a hosted Firebase project:
 npm.cmd run test:firebase
 ```
 
+Run every frontend unit test, backend test, production build, regular browser test, Firestore rules test, and Firebase
+emulator browser test with:
+
+```powershell
+npm.cmd run test:all
+```
+
 This command starts isolated Auth and Firestore emulators under the `demo-smartroad` project, validates the security
 rules, seeds an administrator account, runs the real login and staff-data browser flow, and stops the emulators. Java
 17 is supported by the project-pinned Firebase CLI. Keep `firebase-tools` on the v14 line unless the development
