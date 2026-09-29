@@ -4,6 +4,11 @@ import { ApiError } from "./admin-staff";
 
 const FIREBASE_AUTH_API = "https://identitytoolkit.googleapis.com/v1/accounts";
 
+function firebaseAuthApi() {
+  const emulatorHost = process.env.FIREBASE_AUTH_EMULATOR_HOST?.trim();
+  return emulatorHost ? `http://${emulatorHost}/identitytoolkit.googleapis.com/v1/accounts` : FIREBASE_AUTH_API;
+}
+
 interface FirebaseRestErrorPayload {
   error?: {
     message?: string;
@@ -49,7 +54,7 @@ async function firebaseAuthRequest<T>(path: string, body: Record<string, unknown
     );
   }
 
-  const response = await fetch(`${FIREBASE_AUTH_API}:${path}?key=${encodeURIComponent(apiKey)}`, {
+  const response = await fetch(`${firebaseAuthApi()}:${path}?key=${encodeURIComponent(apiKey)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

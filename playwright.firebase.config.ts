@@ -15,7 +15,8 @@ export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   workers: 1,
-  reporter: [["html", { open: "never" }]],
+  timeout: 60_000,
+  reporter: [["html", { open: "never", outputFolder: "playwright-report/firebase" }]],
   globalSetup: "./e2e/firebase/global-setup.ts",
   use: {
     baseURL,

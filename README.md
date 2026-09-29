@@ -48,9 +48,17 @@ npm.cmd run test:all
 ```
 
 This command starts isolated Auth and Firestore emulators under the `demo-smartroad` project, validates the security
-rules, seeds an administrator account, runs the real login and staff-data browser flow, and stops the emulators. Java
-17 is supported by the project-pinned Firebase CLI. Keep `firebase-tools` on the v14 line unless the development
-machines are upgraded to Java 21, which is required by Firebase CLI v15.
+rules, seeds an administrator account, and runs real browser flows for login, password-reset links, reset cooldowns and
+expiry, invitation verification and resend, email-change verification, cancellation, and expiry. The command stops the
+emulators afterward. Java 17 is supported by the project-pinned Firebase CLI. Keep `firebase-tools` on the v14 line
+unless the development machines are upgraded to Java 21, which is required by Firebase CLI v15.
+
+Regular and Firebase browser reports are kept separately so the second suite does not overwrite the first:
+
+```powershell
+npm.cmd run report:e2e
+npm.cmd run report:e2e:firebase
+```
 
 For manual inspection, keep the emulators running with:
 
