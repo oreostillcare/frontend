@@ -41,7 +41,7 @@ npm.cmd run test:firebase
 ```
 
 Run every frontend unit test, backend test, production build, regular browser test, Firestore rules test, and Firebase
-emulator browser test with:
+emulator browser test, followed by the guarded online Firebase smoke test with:
 
 ```powershell
 npm.cmd run test:all
@@ -52,6 +52,17 @@ rules, seeds an administrator account, and runs real browser flows for login, pa
 expiry, invitation verification and resend, email-change verification, cancellation, and expiry. The command stops the
 emulators afterward. Java 17 is supported by the project-pinned Firebase CLI. Keep `firebase-tools` on the v14 line
 unless the development machines are upgraded to Java 21, which is required by Firebase CLI v15.
+
+The final live smoke test creates a uniquely named temporary Auth user and matching `staff` document in the configured
+online Firebase project. It verifies authenticated Firestore access, rejected client writes, password-reset action
+codes, and verified email changes, then deletes every temporary record in a `finally` cleanup. Set
+`FIREBASE_LIVE_TEST_ALLOW_WRITES=true` only in a local or CI secret environment after confirming that the Firebase web
+and Admin credentials target the same intended project. `test:all` fails safely instead of touching Firebase when that
+explicit acknowledgement is absent. Run only the live check with:
+
+```powershell
+npm.cmd run test:firebase:live
+```
 
 Regular and Firebase browser reports are kept separately so the second suite does not overwrite the first:
 
