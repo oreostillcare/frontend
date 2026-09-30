@@ -13,8 +13,8 @@ service cloud.firestore {
     function activeStaff() {
       return signedIn()
         && exists(/databases/$(database)/documents/staff/$(request.auth.uid))
-        && currentStaff().data.accountStatus != "archived"
-        && currentStaff().data.status != "archived";
+        && currentStaff().data.get("accountStatus", "active") != "archived"
+        && currentStaff().data.get("status", "active") != "archived";
     }
 
     function administrator() {

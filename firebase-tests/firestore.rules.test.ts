@@ -4,7 +4,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing";
-import { doc, getDoc, setDoc, setLogLevel } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, setDoc, setLogLevel } from "firebase/firestore";
 import { afterAll, beforeAll, beforeEach, describe, test } from "vitest";
 
 import { readFile } from "node:fs/promises";
@@ -62,10 +62,64 @@ describe("Firestore security rules", () => {
     await testEnvironment.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), "trafficEvents", "event-1"), { vehicleCount: 4 });
     });
-    const database = testEnvironment.authenticatedContext("operator", { email: "operator@example.test" }).firestore();
+    const database = testEnvironment
+      .authenticatedContext("operator", { email: "operator@example.test" })
+      .firestore();
 
     await assertSucceeds(getDoc(doc(database, "trafficEvents", "event-1")));
     await assertFails(setDoc(doc(database, "trafficEvents", "event-2"), { vehicleCount: 2 }));
+  });
+
+  test("allow active staff records that use only accountStatus", async () => {
+    await testEnvironment.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), "staff", "administrator"), {
+        accountStatus: "active",
+        email: "administrator@example.test",
+        normalizedEmail: "administrator@example.test",
+        role: "Administrator",
+        uid: "administrator",
+        username: "administrator",
+      });
+      await setDoc(doc(context.firestore(), "staff", "operator"), {
+        accountStatus: "active",
+        email: "operator@example.test",
+        normalizedEmail: "operator@example.test",
+        role: "Operator",
+        uid: "operator",
+        username: "operator",
+      });
+      await setDoc(doc(context.firestore(), "trafficEvents", "event-1"), { vehicleCount: 4 });
+    });
+
+    const administratorDatabase = testEnvironment
+      .authenticatedContext("administrator", { email: "administrator@example.test" })
+      .firestore();
+    const operatorDatabase = testEnvironment
+      .authenticatedContext("operator", { email: "operator@example.test" })
+      .firestore();
+
+    await assertSucceeds(getDocs(collection(administratorDatabase, "staff")));
+    await assertSucceeds(getDoc(doc(operatorDatabase, "trafficEvents", "event-1")));
+  });
+
+  test("deny archived staff when either supported status field is archived", async () => {
+    await testEnvironment.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), "staff", "operator"), {
+        accountStatus: "active",
+        email: "operator@example.test",
+        normalizedEmail: "operator@example.test",
+        role: "Operator",
+        status: "archived",
+        uid: "operator",
+        username: "operator",
+      });
+      await setDoc(doc(context.firestore(), "trafficEvents", "event-1"), { vehicleCount: 4 });
+    });
+    const database = testEnvironment
+      .authenticatedContext("operator", { email: "operator@example.test" })
+      .firestore();
+
+    await assertFails(getDoc(doc(database, "trafficEvents", "event-1")));
   });
 
   test("allow administrators to read other staff while operators can only read themselves", async () => {

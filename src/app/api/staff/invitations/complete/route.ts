@@ -102,6 +102,7 @@ export async function POST(request: Request) {
       normalizedEmail: invitationEmail,
       emailVerified: true,
       accountStatus: "active",
+      status: "active",
       emailChangeStatus: "none",
       dateJoined: FieldValue.serverTimestamp(),
       createdAt: FieldValue.serverTimestamp(),
