@@ -6,7 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTelemetry } from "@/hooks/use-telemetry";
-import type { CameraStatus, TrafficNode } from "@/lib/api/types";
+import type { CameraStatus, Esp32NodeStatus, TrafficNode } from "@/lib/api/types";
+import { cn } from "@/lib/utils";
 
 const classes = ["car", "motorcycle", "truck", "bus", "bicycle", "ebike", "jeepney", "tricycle"] as const;
 const value = (input: number | string | undefined) => input ?? "--";
@@ -36,16 +37,72 @@ function StatusCard({
   );
 }
 
+function StateBadge({
+  active,
+  activeLabel,
+  inactiveLabel,
+}: {
+  active: boolean;
+  activeLabel: string;
+  inactiveLabel: string;
+}) {
+  return (
+    <Badge variant={active ? "outline" : "destructive"} className={cn(active && "text-black")}>
+      {active ? activeLabel : inactiveLabel}
+    </Badge>
+  );
+}
+
+function formatLastSeen(timestamp: string | null) {
+  if (!timestamp) return "Never";
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  return `${date.toISOString().slice(11, 19)} UTC`;
+}
+
+function Esp32NodeSummary({ node }: { node: Esp32NodeStatus }) {
+  return (
+    <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="font-medium">ESP32 Status</p>
+        <StateBadge active={node.online} activeLabel="Online" inactiveLabel="Offline" />
+      </div>
+      <div className="flex flex-wrap gap-1">
+        <StateBadge active={node.powerOn} activeLabel="Power ON" inactiveLabel="Power OFF" />
+        <StateBadge active={node.wifiConnected} activeLabel="Wi-Fi Connected" inactiveLabel="Wi-Fi Disconnected" />
+      </div>
+      <dl className="grid min-w-0 grid-cols-[auto_1fr] gap-x-2 text-xs">
+        <dt className="text-muted-foreground">SSID</dt>
+        <dd className="truncate" title={node.ssid ?? "Not available"}>
+          {node.ssid ?? "Not available"}
+        </dd>
+        <dt className="text-muted-foreground">Last Seen</dt>
+        <dd>{formatLastSeen(node.lastSeen)}</dd>
+      </dl>
+    </div>
+  );
+}
+
+const offlineEsp32Node: Esp32NodeStatus = {
+  online: false,
+  powerOn: false,
+  wifiConnected: false,
+  ssid: null,
+  lastSeen: null,
+};
+
 function NodeCard({
   name,
   lane,
   node,
   camera,
+  esp32,
 }: {
   name: string;
   lane: string;
   node?: TrafficNode;
   camera?: CameraStatus;
+  esp32?: Esp32NodeStatus;
 }) {
   const signal = node?.signal ?? "UNKNOWN";
   const cameraOnline = node?.online ?? camera?.online;
@@ -62,6 +119,9 @@ function NodeCard({
             {signal}
           </Badge>
         </CardAction>
+        <div className="col-span-full pt-2">
+          <Esp32NodeSummary node={esp32 ?? offlineEsp32Node} />
+        </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="grid grid-cols-3 gap-3">
@@ -134,15 +194,23 @@ export function TrafficDashboard() {
           note={system?.charging === undefined ? "Charging: --" : `Charging: ${system.charging ? "Yes" : "No"}`}
         />
         <StatusCard title="Detection Service" value={system?.yoloOnline ? "YOLO Online" : "YOLO Offline"} icon={Cpu} />
-        <StatusCard
-          title="Cameras"
-          value={`${onlineCameras ?? "--"}/${totalCameras ?? "--"} online`}
-          icon={Camera}
-        />
+        <StatusCard title="Cameras" value={`${onlineCameras ?? "--"}/${totalCameras ?? "--"} online`} icon={Camera} />
       </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <NodeCard name="Node A" lane="Lane A" node={system?.nodeA} camera={cameraA} />
-        <NodeCard name="Node B" lane="Lane B" node={system?.nodeB} camera={cameraB} />
+        <NodeCard
+          name="Node A"
+          lane="Lane A"
+          node={system?.nodeA}
+          camera={cameraA}
+          esp32={system?.esp32Status?.nodeA}
+        />
+        <NodeCard
+          name="Node B"
+          lane="Lane B"
+          node={system?.nodeB}
+          camera={cameraB}
+          esp32={system?.esp32Status?.nodeB}
+        />
       </div>
     </div>
   );

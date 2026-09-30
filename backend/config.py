@@ -92,6 +92,9 @@ class Settings:
     esp32_node_b_ip: str = os.getenv("ESP32_NODE_B_IP", "192.168.1.221").strip()
     esp32_timeout_seconds: float = env_float("ESP32_TIMEOUT_SECONDS", 1.25)
     esp32_request_attempts: int = env_int("ESP32_REQUEST_ATTEMPTS", 2)
+    esp32_heartbeat_enabled: bool = env_bool("ESP32_HEARTBEAT_ENABLED", True)
+    esp32_heartbeat_interval_seconds: float = env_float("ESP32_HEARTBEAT_INTERVAL_SECONDS", 2.0)
+    esp32_heartbeat_timeout_seconds: float = env_float("ESP32_HEARTBEAT_TIMEOUT_SECONDS", 5.0)
     traffic_comparison_interval_seconds: float = env_float("TRAFFIC_COMPARISON_INTERVAL_SECONDS", 1.0)
     traffic_outgoing_confirmation_frames: int = env_int("TRAFFIC_OUTGOING_CONFIRMATION_FRAMES", 3)
     traffic_outgoing_confirmation_seconds: float = env_float(

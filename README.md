@@ -111,6 +111,18 @@ The launcher runs `app.py` and `npm.cmd run dev`, prints a reset PIN in its term
 
 The `/local` console also provides **Both RED + clear test** for repeated toy-vehicle trials. It works without the launcher: both ESP32 nodes must confirm RED before the backend recreates both detector/tracker workers and clears live counts, temporary track IDs, global vehicle IDs, transaction batches, and controller totals. It does not erase historical records already saved to Firestore. Remove the toy vehicles from both traffic zones before resetting, then place and move them for the next test; any vehicle still visible to YOLO can be detected again immediately after the reset.
 
+The dashboard polls each ESP32 `GET /status` endpoint as a heartbeat. A status response should use this shape (with the matching `NODE-A` or `NODE-B` name):
+
+```json
+{
+  "node": "NODE-A",
+  "power": "ON",
+  "wifi": { "connected": true, "ssid": "Roadworks-A" }
+}
+```
+
+`ESP32_HEARTBEAT_INTERVAL_SECONDS` controls the poll interval, and `ESP32_HEARTBEAT_TIMEOUT_SECONDS` controls how long the last valid response remains online. When that timeout elapses, the dashboard reports the node, its power, and its Wi-Fi connection as offline even if the last response said they were active.
+
 Camera capture continuously drains the laptop webcam into a one-frame overwrite buffer. YOLO always takes the newest available frame, so inference that runs slower than the camera drops stale frames instead of accumulating latency. `frameAgeMs` and `processingMs` are exposed in local telemetry for latency diagnosis. The RTSP URL, authentication, FFmpeg connection, reconnection, and masked-error path remain in the backend under `RTSP - FOR FUTURE USE`.
 
 While the laptop webcam is active, the Flask console and Next.js monitoring page render Camera A twice. Camera B is explicitly labeled `TEST MIRROR`; both MJPEG endpoints share Camera A's single capture, YOLO, ByteTrack, and latest JPEG buffer. This avoids opening the laptop webcam twice. `TEST_SINGLE_CAMERA_MODE` and the second physical worker remain available for the future RTSP mode.

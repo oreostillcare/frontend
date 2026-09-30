@@ -1,4 +1,13 @@
-from traffic_control import ALL_RED, NODE_A, NODE_B, PointComparisonController, priority_command
+import time
+
+from traffic_control import (
+    ALL_RED,
+    NODE_A,
+    NODE_B,
+    Esp32SignalController,
+    PointComparisonController,
+    priority_command,
+)
 from traffic_transactions import TrafficTransactionManager
 
 
@@ -104,6 +113,54 @@ def test_failed_refresh_does_not_keep_reporting_stale_green_state():
     assert failed[NODE_A]["signal"] == "UNKNOWN"
     assert failed[NODE_B]["signal"] == "UNKNOWN"
     assert failed["lastError"] == "ESP32 unavailable"
+
+
+def test_esp32_heartbeat_reports_status_then_expires(monkeypatch):
+    controller = Esp32SignalController(
+        "192.0.2.10",
+        "192.0.2.11",
+        heartbeat_interval_seconds=0.1,
+        heartbeat_timeout_seconds=0.2,
+    )
+    responses = {
+        NODE_A: {
+            "ok": True,
+            "data": {
+                "node": "NODE-A",
+                "power": "ON",
+                "wifi": {"connected": True, "ssid": "Roadworks-A"},
+            },
+        },
+        NODE_B: {
+            "ok": True,
+            "data": {
+                "node": "NODE-B",
+                "powerOn": False,
+                "wifiConnected": False,
+                "ssid": "Roadworks-B",
+            },
+        },
+    }
+    monkeypatch.setattr(controller, "_call", lambda node_key, *_args: responses[node_key])
+
+    current = controller.heartbeat_once()
+
+    assert current[NODE_A]["online"] is True
+    assert current[NODE_A]["powerOn"] is True
+    assert current[NODE_A]["wifiConnected"] is True
+    assert current[NODE_A]["ssid"] == "Roadworks-A"
+    assert current[NODE_A]["lastSeen"].endswith("Z")
+    assert current[NODE_B]["online"] is True
+    assert current[NODE_B]["powerOn"] is False
+    assert current[NODE_B]["wifiConnected"] is False
+
+    with controller._heartbeat_lock:
+        controller._heartbeats[NODE_A]["lastSeenMonotonic"] = time.monotonic() - 1
+
+    expired = controller.heartbeat_snapshot()
+    assert expired[NODE_A]["online"] is False
+    assert expired[NODE_A]["powerOn"] is False
+    assert expired[NODE_A]["wifiConnected"] is False
 
 
 def test_transaction_batch_stays_frozen_then_locks_both_red_until_destination_completes():

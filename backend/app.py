@@ -147,7 +147,11 @@ signal_controller = Esp32SignalController(
     node_b_ip=getattr(settings, "esp32_node_b_ip", "192.168.1.221"),
     timeout_seconds=getattr(settings, "esp32_timeout_seconds", 1.25),
     request_attempts=getattr(settings, "esp32_request_attempts", 2),
+    heartbeat_interval_seconds=getattr(settings, "esp32_heartbeat_interval_seconds", 2.0),
+    heartbeat_timeout_seconds=getattr(settings, "esp32_heartbeat_timeout_seconds", 5.0),
 )
+if getattr(settings, "esp32_heartbeat_enabled", False):
+    signal_controller.start_heartbeat()
 transaction_writer = FirestoreTransactionWriter(
     endpoint=getattr(
         settings,
@@ -170,6 +174,7 @@ priority_controller.start()
 
 
 def stop_workers():
+    signal_controller.stop_heartbeat()
     priority_controller.stop()
     with workers_lock:
         active_workers = list(workers.values())
@@ -359,6 +364,7 @@ def system_status():
             "cameras": cameras,
             "nodeA": node_payload("nodeA", cameras_by_id[NODE_CAMERA_MAP["nodeA"]]),
             "nodeB": node_payload("nodeB", cameras_by_id[NODE_CAMERA_MAP["nodeB"]]),
+            "esp32Status": signal_controller.heartbeat_snapshot(),
             "trafficControl": priority_controller.snapshot(),
         }
     )

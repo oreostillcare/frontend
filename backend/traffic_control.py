@@ -2,6 +2,7 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -29,6 +30,8 @@ class Esp32SignalController:
         node_b_ip: str,
         timeout_seconds: float = 1.25,
         request_attempts: int = 2,
+        heartbeat_interval_seconds: float = 2.0,
+        heartbeat_timeout_seconds: float = 5.0,
     ):
         self.nodes = {
             NODE_A: {"name": "NODE-A", "ip": node_a_ip},
@@ -36,7 +39,22 @@ class Esp32SignalController:
         }
         self.timeout_seconds = max(0.1, timeout_seconds)
         self.request_attempts = max(1, request_attempts)
+        self.heartbeat_interval_seconds = max(0.1, heartbeat_interval_seconds)
+        self.heartbeat_timeout_seconds = max(0.1, heartbeat_timeout_seconds)
         self._command_lock = threading.Lock()
+        self._heartbeat_lock = threading.Lock()
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_thread: threading.Thread | None = None
+        self._heartbeats = {
+            node_key: {
+                "lastSeenMonotonic": None,
+                "lastSeen": None,
+                "powerOn": False,
+                "wifiConnected": False,
+                "ssid": None,
+            }
+            for node_key in self.nodes
+        }
 
     def _call(self, node_key: str, method: str, path: str, payload: dict | None = None) -> dict:
         node = self.nodes[node_key]
@@ -81,6 +99,104 @@ class Esp32SignalController:
             "state": data.get("state") if result["ok"] else UNKNOWN,
             "error": None if verified else result.get("error", "Invalid ESP32 response"),
         }
+
+    @staticmethod
+    def _status_bool(value) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and value in (0, 1):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().upper()
+            if normalized in {"ON", "ONLINE", "CONNECTED", "TRUE", "1"}:
+                return True
+            if normalized in {"OFF", "OFFLINE", "DISCONNECTED", "FALSE", "0"}:
+                return False
+        return None
+
+    def _record_heartbeat(self, node_key: str, result: dict) -> None:
+        if not result.get("ok") or not isinstance(result.get("data"), dict):
+            return
+
+        data = result["data"]
+        reported_node = data.get("node")
+        if reported_node is not None and reported_node != self.nodes[node_key]["name"]:
+            return
+
+        wifi = data.get("wifi")
+        wifi_data = wifi if isinstance(wifi, dict) else {}
+        power_on = self._status_bool(data.get("powerOn", data.get("power")))
+        wifi_connected = self._status_bool(
+            wifi_data.get(
+                "connected",
+                data.get("wifiConnected", data.get("wifiStatus", wifi)),
+            )
+        )
+        ssid = wifi_data.get("ssid", data.get("ssid"))
+        if not isinstance(ssid, str) or not ssid.strip():
+            ssid = None
+
+        with self._heartbeat_lock:
+            previous = self._heartbeats[node_key]
+            self._heartbeats[node_key] = {
+                "lastSeenMonotonic": time.monotonic(),
+                "lastSeen": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "powerOn": True if power_on is None else power_on,
+                "wifiConnected": True if wifi_connected is None else wifi_connected,
+                "ssid": ssid or previous["ssid"],
+            }
+
+    def heartbeat_once(self) -> dict:
+        """Poll both ESP32 status endpoints and record valid heartbeat responses."""
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {
+                node_key: executor.submit(self._call, node_key, "GET", "/status")
+                for node_key in self.nodes
+            }
+            for node_key, future in futures.items():
+                self._record_heartbeat(node_key, future.result())
+        return self.heartbeat_snapshot()
+
+    def start_heartbeat(self) -> None:
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            return
+        self._heartbeat_stop.clear()
+        self._heartbeat_thread = threading.Thread(
+            target=self._run_heartbeat,
+            name="esp32-heartbeat",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
+
+    def stop_heartbeat(self) -> None:
+        self._heartbeat_stop.set()
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            join_timeout = max(
+                2.0,
+                self.timeout_seconds * self.request_attempts + 0.5,
+            )
+            self._heartbeat_thread.join(timeout=join_timeout)
+
+    def heartbeat_snapshot(self) -> dict:
+        now = time.monotonic()
+        with self._heartbeat_lock:
+            nodes = {}
+            for node_key, heartbeat in self._heartbeats.items():
+                last_seen = heartbeat["lastSeenMonotonic"]
+                online = last_seen is not None and now - last_seen <= self.heartbeat_timeout_seconds
+                nodes[node_key] = {
+                    "online": online,
+                    "powerOn": heartbeat["powerOn"] if online else False,
+                    "wifiConnected": heartbeat["wifiConnected"] if online else False,
+                    "ssid": heartbeat["ssid"],
+                    "lastSeen": heartbeat["lastSeen"],
+                }
+        return {"timeoutSeconds": self.heartbeat_timeout_seconds, **nodes}
+
+    def _run_heartbeat(self) -> None:
+        while not self._heartbeat_stop.is_set():
+            self.heartbeat_once()
+            self._heartbeat_stop.wait(self.heartbeat_interval_seconds)
 
     def _set_both_red(self) -> dict[str, dict]:
         with ThreadPoolExecutor(max_workers=2) as executor:

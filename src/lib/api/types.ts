@@ -77,6 +77,18 @@ export interface TrafficControlStatus {
   firestoreUploadEnabled: boolean;
   lastError: string | null;
 }
+export interface Esp32NodeStatus {
+  online: boolean;
+  powerOn: boolean;
+  wifiConnected: boolean;
+  ssid: string | null;
+  lastSeen: string | null;
+}
+export interface Esp32Status {
+  timeoutSeconds: number;
+  nodeA: Esp32NodeStatus;
+  nodeB: Esp32NodeStatus;
+}
 export interface ReleasedVehicleRecord {
   gid: string;
   class: string;
@@ -125,6 +137,7 @@ export interface SystemStatus {
   cameras?: CameraStatus[];
   nodeA?: TrafficNode;
   nodeB?: TrafficNode;
+  esp32Status?: Esp32Status;
   trafficControl?: TrafficControlStatus;
 }
 export interface ModelStatus {
