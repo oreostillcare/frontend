@@ -1,10 +1,11 @@
-"""Start and supervise the local Flask and Next.js development servers on Windows.
+r"""Start and supervise local Flask and Next.js servers on Windows.
 
 Run from the repository root with: backend\.venv\Scripts\python.exe backend\run_local.py
 Both services must be stopped before starting this launcher.
 """
 
 import os
+from argparse import ArgumentParser
 import queue
 import secrets
 import shutil
@@ -56,13 +57,26 @@ def stop_owned_process(process: subprocess.Popen | None) -> None:
         raise RuntimeError(f"Owned process {process.pid} did not stop") from None
 
 
+def frontend_command(npm: str, mode: str) -> list[str]:
+    if mode == "production":
+        if not (PROJECT_DIR / ".next" / "BUILD_ID").is_file():
+            raise SystemExit("Production build missing. Run npm run build before starting the launcher.")
+        return [npm, "run", "start"]
+    return [npm, "run", "dev"]
+
+
 def main() -> None:
+    parser = ArgumentParser(description=__doc__)
+    parser.add_argument("--frontend-mode", choices=("development", "production"), default="development")
+    args = parser.parse_args()
     if os.name != "nt":
         raise SystemExit("This launcher is configured for the Windows local console.")
 
     npm = shutil.which("npm.cmd")
     if npm is None:
         raise SystemExit("npm.cmd was not found in PATH.")
+    # Validate before creating the supervisor or starting any detection/hardware.
+    frontend_args = frontend_command(npm, args.frontend_mode)
     for port in (5000, 3000):
         if not port_is_available(port):
             raise SystemExit(f"Port {port} is already in use. Stop the old Flask/Next.js terminal first.")
@@ -117,7 +131,7 @@ def main() -> None:
         )
         try:
             frontend_process = subprocess.Popen(
-                [npm, "run", "dev"],
+                frontend_args,
                 cwd=PROJECT_DIR,
                 env=os.environ.copy(),
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,

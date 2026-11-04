@@ -19,3 +19,7 @@ export async function apiGet<T>(path: string, timeoutMs = 4000): Promise<T> {
 export function videoUrl(cameraId: number) {
   return `${DETECTION_PROXY_PATH}/video/camera/${cameraId}`;
 }
+
+export function rawVideoUrl(cameraId: number) {
+  return `${DETECTION_PROXY_PATH}/video/raw/camera/${cameraId}`;
+}

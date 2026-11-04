@@ -1,0 +1,4 @@
+# Optional, tested backend adapter versions. PyTorch remains the default.
+-r requirements.txt
+ultralytics==8.4.126
+openvino==2026.4.1

@@ -79,7 +79,7 @@
         </div>
         <div class="header-actions">
           <span class="reset-status" id="test-reset-status" role="status" aria-live="polite"></span>
-          <button class="reset-button test-reset-button" id="reset-test-state" type="button" title="Verify both ESP32 signals RED, then clear all test detection state">Both RED + clear test</button>
+          <button class="reset-button test-reset-button" id="reset-test-state" type="button" {% if display_mirror %}disabled{% endif %} title="{% if display_mirror %}Signal commands disabled during display-only mirror testing{% else %}Verify both ESP32 signals RED, then clear all test detection state{% endif %}">Both RED + clear test</button>
           <span class="reset-status" id="reset-status" role="status" aria-live="polite">{% if not reset_available %}Use backend/run_local.py to enable reset{% endif %}</span>
           <button class="reset-button" id="reset-system" type="button" {% if not reset_available %}disabled{% endif %} title="Restart Flask and Next.js, and clear in-memory camera and detection state">Reset system</button>
           <span class="badge online">LOCAL SYSTEM</span>
@@ -104,10 +104,10 @@
           <div class="camera-header">
             <div>
               <h2 class="camera-title">Camera {{ "A" if camera_id == 1 else "B" }} / Lane {{ "A" if camera_id == 1 else "B" }}</h2>
-              <p class="camera-description">Independent USB camera, detector tracking, counting, and telemetry</p>
+              <p class="camera-description">{% if display_mirror and camera_id == 2 %}TEST ONLY: Camera A display mirror. No Node B detection or counts.{% else %}Independent camera, detector tracking, counting, and telemetry{% endif %}</p>
               <label class="camera-source-control" for="camera-{{ camera_id }}-source">
                 <span>Camera source</span>
-                <select id="camera-{{ camera_id }}-source" data-camera-id="{{ camera_id }}">
+                <select id="camera-{{ camera_id }}-source" data-camera-id="{{ camera_id }}" {% if display_mirror and camera_id == 2 %}disabled{% endif %}>
                   {% for device in camera_devices %}
                   <option value="{{ device.index }}" {% if camera_sources[camera_id] == device.index %}selected{% endif %}>{{ device.name }}</option>
                   {% endfor %}
@@ -140,19 +140,19 @@
       function renderCamera(camera) {
         const card = document.getElementById(`camera-${camera.id}`);
         if (!card) return;
-        card.dataset.online = String(Boolean(camera.online));
+        card.dataset.online = String(Boolean(camera.displayOnline ?? camera.online));
         const status = document.getElementById(`camera-${camera.id}-status`);
-        status.textContent = camera.online ? "LIVE" : "OFFLINE";
-        status.className = `badge ${camera.online ? "online" : "offline"}`;
+        status.textContent = camera.testMirror ? "TEST MIRROR · A" : camera.online ? "LIVE" : "OFFLINE";
+        status.className = `badge ${(camera.displayOnline ?? camera.online) ? "online" : "offline"}`;
         document.getElementById(`camera-${camera.id}-fps`).textContent = value(camera.fps);
         document.getElementById(`camera-${camera.id}-visible`).textContent = value(camera.visibleVehicles);
         document.getElementById(`camera-${camera.id}-frame-age`).textContent = camera.frameAgeMs == null ? "--" : `${camera.frameAgeMs} ms`;
         document.getElementById(`camera-${camera.id}-processing`).textContent = camera.processingMs == null ? "--" : `${camera.processingMs} ms`;
         const sourceSelect = document.getElementById(`camera-${camera.id}-source`);
         const sourceMessage = document.getElementById(`camera-${camera.id}-source-message`);
-        if (camera.sourceIndex !== null && sourceSelect.dataset.switching !== "true") {
-          sourceSelect.value = String(camera.sourceIndex);
-          sourceMessage.textContent = camera.sourceName;
+        if (sourceSelect.dataset.switching !== "true") {
+          sourceSelect.value = String(camera.sourceId ?? camera.sourceIndex);
+          sourceMessage.textContent = camera.testMirror ? "Camera A display only — no Node B events" : camera.sourceName;
         }
         document.getElementById(`camera-${camera.id}-classes`).innerHTML = vehicleClasses
           .map((name) => `<div class="class-item"><span>${name}</span><span class="class-count">${value(camera.classes?.[name])}</span></div>`)
@@ -248,7 +248,7 @@
           const response = await fetch(`/api/cameras/${cameraId}/source`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sourceIndex: Number(select.value) }),
+            body: JSON.stringify({ sourceId: select.value }),
           });
           const payload = await response.json();
           if (!response.ok) throw new Error(payload.error || "Unable to switch camera");

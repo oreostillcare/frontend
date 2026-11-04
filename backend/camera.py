@@ -6,6 +6,7 @@ import cv2
 
 from config import Settings, mask_rtsp_url
 from detector import Detector, ModelPool, VEHICLE_CLASSES, draw_annotation_text
+from performance import PROCESS_SAMPLER, StageProfiler
 from vehicle_identity import GlobalVehicleRegistry
 
 
@@ -39,6 +40,12 @@ class CameraWorker:
         self._stop = threading.Event()
         self._capture_thread: threading.Thread | None = None
         self._processing_thread: threading.Thread | None = None
+        self._raw_stream_thread: threading.Thread | None = None
+        self._raw_jpeg_condition = threading.Condition()
+        self._raw_jpeg_frame = None
+        self._raw_jpeg_version = 0
+        self._raw_viewers = 0
+        self._raw_view_generation = 0
 
         self._raw_condition = threading.Condition()
         self._raw_frame = None
@@ -48,6 +55,13 @@ class CameraWorker:
         self._jpeg_condition = threading.Condition()
         self._jpeg_frame: bytes | None = None
         self._jpeg_version = 0
+        self._viewer_count = 0
+        self._viewer_generation = 0
+        self._viewer_aware_jpeg = getattr(config, "viewer_aware_jpeg", True)
+        self.profiler = getattr(
+            self.detector, "profiler", StageProfiler(getattr(config, "performance_profiling", False))
+        )
+        self._performance: dict = {}
 
         self.online = False
         self.capture_fps = 0.0
@@ -87,10 +101,14 @@ class CameraWorker:
             self._raw_condition.notify_all()
         with self._jpeg_condition:
             self._jpeg_condition.notify_all()
+        with self._raw_jpeg_condition:
+            self._raw_jpeg_condition.notify_all()
 
-    def wait_until_stopped(self, timeout: float = 2.0) -> None:
+    def wait_until_stopped(self, timeout: float | None = None) -> None:
+        if timeout is None:
+            timeout = max(2.0, getattr(self.config, "rtsp_timeout_ms", 5000) / 1000 + 1) if isinstance(self.source, str) else 2.0
         current_thread = threading.current_thread()
-        for worker_thread in (self._capture_thread, self._processing_thread):
+        for worker_thread in (self._capture_thread, self._processing_thread, self._raw_stream_thread):
             if worker_thread and worker_thread is not current_thread:
                 worker_thread.join(timeout=timeout)
 
@@ -106,24 +124,16 @@ class CameraWorker:
         return bool(source and source.strip())
 
     def _open_capture(self):
-        # RTSP - FOR FUTURE USE
-        # The source URL may include username/password authentication. Restore
-        # this return when switching the active source back to RTSP.
-        # return cv2.VideoCapture(str(self.source), cv2.CAP_FFMPEG)
-
-        # Camera Source = USB Cameras
-        # DirectShow indices correspond to the Windows friendly-name order used
-        # to configure Logi C270 HD WebCam and Web Camera.
+        if isinstance(self.source, str):
+            timeout = max(100, getattr(self.config, "rtsp_timeout_ms", 5000))
+            return cv2.VideoCapture(self.source, cv2.CAP_FFMPEG, [
+                cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout, cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout,
+            ])
         return cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
 
     def _capture_errors(self) -> tuple[str, str]:
-        # RTSP - FOR FUTURE USE
-        # return (
-        #     f"Unable to connect to {mask_rtsp_url(str(self.source))}",
-        #     "Camera stream interrupted; reconnecting",
-        # )
-
-        # Camera Source = USB Cameras
+        if isinstance(self.source, str):
+            return (f"Unable to connect to {mask_rtsp_url(self.source)}", "Camera stream interrupted; reconnecting")
         return (
             f"USB camera {self.camera_id} unavailable",
             f"USB camera {self.camera_id} interrupted; reconnecting",
@@ -138,6 +148,10 @@ class CameraWorker:
         with self._jpeg_condition:
             self._jpeg_frame = None
             self._jpeg_condition.notify_all()
+        with self._raw_jpeg_condition:
+            self._raw_jpeg_frame = None
+            self._raw_view_generation += 1
+            self._raw_jpeg_condition.notify_all()
 
     def _capture_loop(self) -> None:
         last_capture_at: float | None = None
@@ -149,7 +163,8 @@ class CameraWorker:
             try:
                 capture = self._open_capture()
                 capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                capture.set(cv2.CAP_PROP_FPS, max(1, getattr(self.config, "camera_capture_fps", 60)))
+                if isinstance(self.source, int):
+                    capture.set(cv2.CAP_PROP_FPS, max(1, getattr(self.config, "camera_capture_fps", 60)))
 
                 if not capture.isOpened():
                     self._mark_offline(unavailable_error)
@@ -189,12 +204,21 @@ class CameraWorker:
 
             self._stop.wait(self.config.reconnect_seconds)
 
+    def _wait_for_processing_deadline(self, deadline: float) -> None:
+        # Match the validated pacing without spinning; requested sleeps are <= 10 ms.
+        while not self._stop.is_set():
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.01, remaining))
+
     def _processing_loop(self) -> None:
         interval = 1 / max(self.config.detection_fps, 0.1)
         last_raw_version = -1
         last_completed_at: float | None = None
 
         while not self._stop.is_set():
+            deadline = time.perf_counter() + interval
             with self._raw_condition:
                 ready = self._raw_condition.wait_for(
                     lambda: self._stop.is_set()
@@ -212,20 +236,17 @@ class CameraWorker:
 
             started_at = time.perf_counter()
             annotated, detections = self.detector.process(frame)
-            if self.detection_handler is not None:
-                try:
-                    self.detection_handler(self.camera_id, detections)
-                except Exception as error:
-                    self.error = f"Traffic transaction event error: {error}"
-            self._draw_transaction_counts(annotated)
-            encoded, jpeg = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 82])
+            with self.profiler.measure("transactionMs"):
+                if self.detection_handler is not None:
+                    try:
+                        self.detection_handler(self.camera_id, detections)
+                    except Exception as error:
+                        self.error = f"Traffic transaction event error: {error}"
+            # This also updates telemetry state, so it must run without viewers.
+            with self.profiler.measure("transactionOverlayMs"):
+                self._draw_transaction_counts(annotated)
+            encoded = self._encode_frame(annotated)
             completed_at = time.perf_counter()
-
-            if encoded:
-                with self._jpeg_condition:
-                    self._jpeg_frame = jpeg.tobytes()
-                    self._jpeg_version += 1
-                    self._jpeg_condition.notify_all()
 
             zone_detections = [item for item in detections if item.get("inTrafficZone")]
             self.visible = len({item["trackId"] for item in zone_detections})
@@ -239,11 +260,40 @@ class CameraWorker:
                 if completed_interval > 0:
                     self.fps = self._smoothed_fps(self.fps, 1 / completed_interval)
             last_completed_at = completed_at
+            if self.profiler.enabled:
+                self._performance = {
+                    **self.profiler.snapshot(),
+                    "jpegEncoded": encoded,
+                    "detectionFps": self.fps,
+                    "processingMs": self.processing_ms,
+                    "frameAgeMs": self.frame_age_ms,
+                }
 
             # Rate-limit inference, then fetch the newest frame on the next
             # iteration instead of holding a frame during the wait.
-            processing_time = completed_at - started_at
-            self._stop.wait(max(0, interval - processing_time))
+            self._wait_for_processing_deadline(deadline)
+
+    def _encode_frame(self, frame) -> bool:
+        with self._jpeg_condition:
+            generation = self._viewer_generation
+            if self._viewer_aware_jpeg and self._viewer_count == 0:
+                if self.profiler.enabled:
+                    self.profiler.values["jpegMs"] = 0.0
+                return False
+        with self.profiler.measure("jpegMs"):
+            encoded, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 82])
+        if not encoded:
+            return False
+        with self._jpeg_condition:
+            # A new first viewer must not receive an encode from an old session.
+            if self._viewer_aware_jpeg and (
+                self._viewer_count == 0 or generation != self._viewer_generation
+            ):
+                return False
+            self._jpeg_frame = jpeg.tobytes()
+            self._jpeg_version += 1
+            self._jpeg_condition.notify_all()
+        return True
 
     def _draw_transaction_counts(self, frame) -> None:
         incoming_ledger = getattr(self.detector, "incoming_ledger", None)
@@ -292,23 +342,96 @@ class CameraWorker:
             2,
         )
 
-    def frames(self):
+    def _raw_stream_loop(self):
+        """Viewer-only encoding from the capture buffer: never invokes a detector."""
         last_version = -1
         while not self._stop.is_set():
-            with self._jpeg_condition:
-                ready = self._jpeg_condition.wait_for(
-                    lambda: self._stop.is_set()
-                    or (self._jpeg_frame is not None and self._jpeg_version != last_version),
-                    timeout=2,
+            with self._raw_jpeg_condition:
+                self._raw_jpeg_condition.wait_for(lambda: self._stop.is_set() or self._raw_viewers > 0)
+                if self._stop.is_set():
+                    return
+                generation = self._raw_view_generation
+            with self._raw_condition:
+                ready = self._raw_condition.wait_for(
+                    lambda: self._stop.is_set() or (self._raw_frame is not None and self._raw_version != last_version), timeout=1,
                 )
                 if self._stop.is_set():
                     return
-                if not ready or self._jpeg_frame is None or self._jpeg_version == last_version:
+                if not ready or self._raw_frame is None:
                     continue
-                frame = self._jpeg_frame
-                last_version = self._jpeg_version
+                frame = self._raw_frame.copy()
+                last_version = self._raw_version
+            encoded, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 82])
+            with self._raw_jpeg_condition:
+                if encoded and self.online and self._raw_viewers and generation == self._raw_view_generation:
+                    self._raw_jpeg_frame = jpeg.tobytes()
+                    self._raw_jpeg_version += 1
+                    self._raw_jpeg_condition.notify_all()
+            self._stop.wait(1 / max(.1, getattr(self.config, "raw_stream_fps", 10.0)))
 
-            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+    def raw_frames(self):
+        """Shared unannotated MJPEG cache; all viewers reuse one encoder."""
+        last_version = -1
+        with self._raw_jpeg_condition:
+            if not self._source_is_configured(self.source):
+                return
+            if self._raw_viewers == 0:
+                self._raw_view_generation += 1
+                self._raw_jpeg_frame = None
+            self._raw_viewers += 1
+            if self._raw_stream_thread is None:
+                self._raw_stream_thread = threading.Thread(target=self._raw_stream_loop, name=f"camera-raw-view-{self.camera_id}", daemon=True)
+                self._raw_stream_thread.start()
+            self._raw_jpeg_condition.notify_all()
+        try:
+            while not self._stop.is_set():
+                with self._raw_jpeg_condition:
+                    ready = self._raw_jpeg_condition.wait_for(
+                        lambda: self._stop.is_set() or (self._raw_jpeg_frame is not None and self._raw_jpeg_version != last_version), timeout=2,
+                    )
+                    if self._stop.is_set():
+                        return
+                    if not ready or self._raw_jpeg_frame is None:
+                        continue
+                    frame, last_version = self._raw_jpeg_frame, self._raw_jpeg_version
+                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+        finally:
+            with self._raw_jpeg_condition:
+                self._raw_viewers -= 1
+                if not self._raw_viewers:
+                    self._raw_jpeg_frame = None
+                self._raw_jpeg_condition.notify_all()
+
+    def frames(self):
+        last_version = -1
+        with self._jpeg_condition:
+            if self._viewer_count == 0 and self._viewer_aware_jpeg:
+                self._viewer_generation += 1
+                self._jpeg_frame = None
+            self._viewer_count += 1
+            self._jpeg_condition.notify_all()
+        try:
+            while not self._stop.is_set():
+                with self._jpeg_condition:
+                    ready = self._jpeg_condition.wait_for(
+                        lambda: self._stop.is_set()
+                        or (self._jpeg_frame is not None and self._jpeg_version != last_version),
+                        timeout=2,
+                    )
+                    if self._stop.is_set():
+                        return
+                    if not ready or self._jpeg_frame is None or self._jpeg_version == last_version:
+                        continue
+                    frame = self._jpeg_frame
+                    last_version = self._jpeg_version
+
+                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+        finally:
+            with self._jpeg_condition:
+                self._viewer_count -= 1
+                if self._viewer_count == 0 and self._viewer_aware_jpeg:
+                    self._jpeg_frame = None
+                self._jpeg_condition.notify_all()
 
     def telemetry(self) -> dict:
         passed = self.detector.track_state.passed if self.online and self.config.line_counting else None
@@ -316,7 +439,7 @@ class CameraWorker:
         incoming_vehicles, incoming_points = (
             incoming_ledger.snapshot() if self.online and incoming_ledger else ([], None)
         )
-        return {
+        payload = {
             "id": self.camera_id,
             "configured": self._source_is_configured(self.source),
             "online": self.online,
@@ -336,3 +459,13 @@ class CameraWorker:
             "expectedVehicles": self.expected_vehicles if self.online else None,
             "vehicleCountState": self.vehicle_count_state if self.online else "OFFLINE",
         }
+        if self.profiler.enabled:
+            with self._jpeg_condition:
+                viewers = self._viewer_count
+            payload["performance"] = {
+                **(self._performance if self.online else {}),
+                "viewers": viewers,
+                "viewerAwareJpeg": self._viewer_aware_jpeg,
+                **PROCESS_SAMPLER.snapshot(),
+            }
+        return payload

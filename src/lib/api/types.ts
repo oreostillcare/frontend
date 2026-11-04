@@ -24,6 +24,7 @@ export interface CameraStatus {
   configured: boolean;
   online: boolean;
   testMirror?: boolean;
+  displayOnline?: boolean;
   sourceCamera?: number;
   captureFps?: number | null;
   fps?: number | null;

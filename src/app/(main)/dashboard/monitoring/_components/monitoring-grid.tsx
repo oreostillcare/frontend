@@ -5,15 +5,17 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { useTelemetry } from "@/hooks/use-telemetry";
-import { videoUrl } from "@/lib/api/client";
+import { rawVideoUrl, videoUrl } from "@/lib/api/client";
 import type { CameraStatus } from "@/lib/api/types";
 
 function CameraCard({ camera, id }: { camera?: CameraStatus; id: number }) {
   const [streamError, setStreamError] = useState(false);
   const [streamAttempt, setStreamAttempt] = useState(0);
+  const [streamMode, setStreamMode] = useState<"raw" | "annotated">("raw");
+  const [streamLoaded, setStreamLoaded] = useState(false);
   const mirror = id === 2 && camera?.testMirror;
-  const url = videoUrl(id);
-  const cameraOnline = Boolean(camera?.online);
+  const url = streamMode === "raw" ? rawVideoUrl(id) : videoUrl(id);
+  const cameraOnline = Boolean(camera?.displayOnline ?? camera?.online);
   let status: "LIVE" | "OFFLINE" | "RETRYING" | "TEST MIRROR" = "OFFLINE";
   let statusVariant: "secondary" | "destructive" | "outline" = "destructive";
   if (mirror) {
@@ -36,6 +38,14 @@ function CameraCard({ camera, id }: { camera?: CameraStatus; id: number }) {
     return () => window.clearTimeout(retryTimer);
   }, [cameraOnline, streamError]);
 
+  useEffect(() => {
+    if (!cameraOnline || streamError) return;
+    const timer = window.setTimeout(() => {
+      if (streamMode === "raw" && !streamLoaded) setStreamMode("annotated");
+    }, 10000);
+    return () => window.clearTimeout(timer);
+  }, [cameraOnline, streamError, streamLoaded, streamMode]);
+
   return (
     <Card>
       <CardHeader>
@@ -43,7 +53,8 @@ function CameraCard({ camera, id }: { camera?: CameraStatus; id: number }) {
           Camera {id === 1 ? "A" : "B"} / Lane {id === 1 ? "A" : "B"}
         </CardTitle>
         <CardDescription>
-          {mirror ? "Camera A mirror · shared YOLO worker" : "YOLO + ByteTrack processed feed"}
+          {mirror ? "TEST ONLY: Camera A display mirror. No Node B detection or counts. " : ""}
+          {streamMode === "raw" ? "Raw CCTV · unannotated" : "Annotated MJPEG fallback"}
         </CardDescription>
         <CardAction>
           <Badge variant={statusVariant}>{status}</Badge>
@@ -55,8 +66,13 @@ function CameraCard({ camera, id }: { camera?: CameraStatus; id: number }) {
             <img
               className="size-full object-contain"
               src={`${url}?attempt=${streamAttempt}`}
-              alt={`Processed traffic feed for Camera ${id}`}
-              onError={() => setStreamError(true)}
+              alt={`${streamMode === "raw" ? "Raw" : "Annotated fallback"} traffic feed for Camera ${id}`}
+              onLoad={() => setStreamLoaded(true)}
+              onError={() => {
+                setStreamLoaded(false);
+                if (streamMode === "raw") setStreamMode("annotated");
+                else setStreamError(true);
+              }}
             />
           </div>
         ) : (
@@ -103,8 +119,8 @@ export function MonitoringGrid() {
         <h1 className="text-3xl leading-none tracking-tight">Live Monitoring</h1>
         <p className="mt-2 text-muted-foreground text-sm">
           {hasTestMirror
-            ? "Two-view load test. Camera B mirrors Camera A without a second RTSP or inference worker."
-            : "Two camera slots for locally processed detection feeds."}
+            ? "Camera B is a test-only display mirror. Its traffic status and counts remain inactive; signal actuation is disabled."
+            : "Raw camera views. Detection, tracking and counting continue in the shared local backend."}
         </p>
       </div>
       {error && <Badge variant="destructive">Reconnecting to detection backend</Badge>}

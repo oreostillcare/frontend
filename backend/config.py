@@ -48,9 +48,12 @@ class Settings:
     logi_c270_camera_index: int = env_int("LOGI_C270_CAMERA_INDEX", 2)
     web_camera_index: int = env_int("WEB_CAMERA_INDEX", env_int("USB_CAMERA_2_INDEX", 1))
 
-    # RTSP - FOR FUTURE USE
-    # Keep the authenticated stream URLs loaded so RTSP can be restored without
-    # rebuilding the connection configuration.
+    # Credentials remain server-side; browsers receive only local stream URLs.
+    camera_1_source: str = os.getenv("CAMERA_1_SOURCE", "usb").strip().lower()
+    camera_2_source: str = os.getenv("CAMERA_2_SOURCE", "usb").strip().lower()
+    node_b_display_mirror: bool = env_bool("ENABLE_NODE_B_DISPLAY_MIRROR", False)
+    rtsp_timeout_ms: int = env_int("RTSP_TIMEOUT_MS", 5000)
+    raw_stream_fps: float = env_float("RAW_STREAM_FPS", 10.0)
     camera_1_url: str = env_camera_url("CAMERA_1_RTSP_URL")
     camera_2_url: str = env_camera_url("CAMERA_2_RTSP_URL")
     local_yolo_model: Path = BASE_DIR / os.getenv("LOCAL_YOLO_MODEL", "models/trained_local.pt")
@@ -59,6 +62,18 @@ class Settings:
     image_size: int = env_int("DETECTION_IMAGE_SIZE", 640)
     camera_capture_fps: int = env_int("CAMERA_CAPTURE_FPS", 60)
     detection_fps: float = env_float("DETECTION_FPS", 5.0)
+    performance_profiling: bool = env_bool("ENABLE_PERFORMANCE_PROFILING", False)
+    viewer_aware_jpeg: bool = env_bool("ENABLE_VIEWER_AWARE_JPEG", True)
+    inference_backend: str = os.getenv("INFERENCE_BACKEND", "pytorch").strip().lower()
+    cpu_inference_threads: int = env_int("CPU_INFERENCE_THREADS", 0)
+    local_openvino_model: Path = BASE_DIR / os.getenv(
+        "LOCAL_OPENVINO_MODEL", "models/openvino/trained_local_openvino_model"
+    )
+    coco_openvino_model: Path = BASE_DIR / os.getenv(
+        "COCO_OPENVINO_MODEL", "models/openvino/yolov8n_openvino_model"
+    )
+    openvino_threads: int = env_int("OPENVINO_INFERENCE_THREADS", 0)
+    openvino_streams: int = env_int("OPENVINO_NUM_STREAMS", 0)
     line_counting: bool = env_bool("ENABLE_LINE_COUNTING", True)
     line: tuple[int, int, int, int] = (env_int("LINE_X1", 0), env_int("LINE_Y1", 360), env_int("LINE_X2", 1280), env_int("LINE_Y2", 360))
     guide_green_y_percent: float = env_percentage("GUIDE_GREEN_Y_PERCENT", 15.0)

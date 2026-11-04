@@ -21,6 +21,7 @@ from detector import (
     draw_vehicle_trail,
     vehicle_label_lines,
 )
+from performance import StageProfiler
 
 
 def bare_detector():
@@ -220,6 +221,22 @@ def test_tracked_detections_filters_to_the_session_allowlist():
     )
     assert [item["class"] for item in detections] == ["car", "bus"]
     assert [item["trackId"] for item in detections] == [COCO_TRACK_ID_OFFSET + 3, COCO_TRACK_ID_OFFSET + 5]
+
+
+def test_optional_model_profile_keeps_inference_arguments_and_reports_result_speed():
+    instance = bare_detector()
+    instance.profiler = StageProfiler(True)
+    instance.config = SimpleNamespace(confidence=0.5, image_size=640)
+    model = SimpleNamespace(track=Mock(return_value=[SimpleNamespace(boxes=None, speed={"inference": 12.5})]))
+    session = ModelSession(model, threading.RLock(), [0])
+    instance.local_session = session
+    assert instance.tracked_detections(session, "frame", LOCAL_VEHICLES) == []
+    assert instance.profiler.snapshot()["localInferenceMs"] == 12.5
+    assert instance.profiler.snapshot()["localLockWaitMs"] >= 0
+    assert instance.profiler.snapshot()["localTrackCallMs"] >= 0
+    model.track.assert_called_once_with(
+        "frame", persist=True, tracker="bytetrack.yaml", classes=[0], conf=0.5, imgsz=640, verbose=False
+    )
 
 
 def test_process_returns_unchanged_frame_when_both_models_are_unavailable():

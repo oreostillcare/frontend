@@ -15,6 +15,8 @@ from traffic_control import Esp32SignalController, PointComparisonController
 from traffic_transactions import FirestoreTransactionWriter, TrafficTransactionManager
 from vehicle_identity import GlobalVehicleRegistry
 
+display_mirror = getattr(settings, "node_b_display_mirror", False)
+
 app = Flask(__name__)
 runtime_id = secrets.token_hex(8)
 reset_lock = threading.Lock()
@@ -39,21 +41,35 @@ CAMERA_DEVICES = (
         "name": "Logi C270 HD WebCam",
     },
     {"index": settings.web_camera_index, "name": "Web Camera"},
+    {"index": -1, "name": "Disabled"},
+    *({"index": f"rtsp-{camera_id}", "name": f"Tapo CCTV {camera_id} (RTSP)"}
+      for camera_id in (1, 2) if getattr(settings, f"camera_{camera_id}_url", "")),
 )
 CAMERA_DEVICE_NAMES = {device["index"]: device["name"] for device in CAMERA_DEVICES}
+SOURCE_VALUES = {device["index"]: (getattr(settings, f"camera_{device['index'][-1]}_url")
+                 if isinstance(device["index"], str) else device["index"]) for device in CAMERA_DEVICES}
 
-# Camera Source = USB Cameras
+
+def configured_source(camera_id, usb_index):
+    mode = getattr(settings, f"camera_{camera_id}_source", "usb")
+    if mode == "usb":
+        return usb_index
+    if mode == "disabled":
+        return -1
+    if mode == "rtsp":
+        return getattr(settings, f"camera_{camera_id}_url", "") or -1
+    raise ValueError("Camera source must be usb, rtsp or disabled")
+
+
+def source_id(source):
+    return next((key for key, value in SOURCE_VALUES.items() if value == source), -1)
+
 camera_sources: dict[int, int | str] = {
-    1: settings.web_camera_index,  # Node A / Lane A -> Web Camera
-    2: getattr(settings, "logi_c270_camera_index", settings.dv20_camera_index),  # Node B -> Logi C270
+    1: configured_source(1, settings.web_camera_index),
+    2: -1 if display_mirror else configured_source(2, getattr(settings, "logi_c270_camera_index", settings.dv20_camera_index)),
 }
-
-# RTSP - FOR FUTURE USE
-# Keep these source assignments disabled until the deployment switches from USB.
-# camera_sources = {
-#     1: settings.camera_1_url,
-#     2: settings.camera_2_url,
-# }
+if camera_sources[1] not in (None, "", -1) and camera_sources[1] == camera_sources[2]:
+    raise ValueError("Two nodes must not share a physical input; use display-only mirror mode")
 
 model_pool = ModelPool(settings)
 transaction_manager = TrafficTransactionManager(
@@ -142,7 +158,14 @@ def read_node_points() -> dict:
     return node_scores
 
 
-signal_controller = Esp32SignalController(
+class MirrorSafeSignals(Esp32SignalController):
+    def _call(self, *args, **kwargs):
+        # Includes reset/supervisor paths: disabling automatic scheduling alone
+        # would not block manual all-red commands during visual-only tests.
+        return {"ok": False, "error": "ESP32 I/O disabled during display mirror testing"}
+
+
+signal_controller = (MirrorSafeSignals if display_mirror else Esp32SignalController)(
     node_a_ip=getattr(settings, "esp32_node_a_ip", "192.168.1.220"),
     node_b_ip=getattr(settings, "esp32_node_b_ip", "192.168.1.221"),
     timeout_seconds=getattr(settings, "esp32_timeout_seconds", 1.25),
@@ -150,7 +173,7 @@ signal_controller = Esp32SignalController(
     heartbeat_interval_seconds=getattr(settings, "esp32_heartbeat_interval_seconds", 2.0),
     heartbeat_timeout_seconds=getattr(settings, "esp32_heartbeat_timeout_seconds", 5.0),
 )
-if getattr(settings, "esp32_heartbeat_enabled", False):
+if not display_mirror and getattr(settings, "esp32_heartbeat_enabled", False):
     signal_controller.start_heartbeat()
 transaction_writer = FirestoreTransactionWriter(
     endpoint=getattr(
@@ -166,7 +189,7 @@ priority_controller = PointComparisonController(
     read_points=read_node_points,
     signal_controller=signal_controller,
     interval_seconds=getattr(settings, "traffic_comparison_interval_seconds", 1.0),
-    enabled=getattr(settings, "esp32_control_enabled", False),
+    enabled=not display_mirror and getattr(settings, "esp32_control_enabled", False),
     transaction_manager=transaction_manager,
     transaction_writer=transaction_writer,
 )
@@ -195,7 +218,8 @@ def local_monitor():
     return render_template(
         "local_monitor.html",
         camera_devices=CAMERA_DEVICES,
-        camera_sources=camera_sources,
+        camera_sources={key: source_id(value) for key, value in camera_sources.items()},
+        display_mirror=display_mirror,
         detection_fps=settings.detection_fps,
         line_counting=settings.line_counting,
         reset_available=bool(os.getenv("LOCAL_SUPERVISOR_URL") and os.getenv("LOCAL_RESET_PIN")),
@@ -217,10 +241,13 @@ def camera_payload(camera_id: int):
         {
             "id": camera_id,
             "sourceIndex": worker.source if isinstance(worker.source, int) else None,
-            "sourceName": CAMERA_DEVICE_NAMES.get(worker.source, "Unknown camera"),
+            "sourceId": source_id(worker.source),
+            "sourceName": CAMERA_DEVICE_NAMES.get(source_id(worker.source), "Unknown camera"),
             **CAMERA_NODE_MAP[camera_id],
         }
     )
+    if display_mirror and camera_id == 2:
+        payload.update(testMirror=True, sourceCamera=1, displayOnline=bool(workers[1].online))
     return payload
 
 
@@ -260,6 +287,8 @@ def local_runtime():
 
 @app.post("/api/local/reset-test-state")
 def reset_test_state():
+    if display_mirror:
+        return jsonify({"error": "Signal reset is disabled during display-only mirror testing"}), 409
     origin = request.headers.get("Origin")
     if origin and origin.rstrip("/") != request.host_url.rstrip("/"):
         return jsonify({"error": "Reset must be requested from this console"}), 403
@@ -386,10 +415,14 @@ def select_camera_source(camera_id: int):
         return jsonify({"error": "Camera not found"}), 404
 
     body = request.get_json(silent=True) or {}
-    source_index = body.get("sourceIndex")
-    allowed_sources = set(CAMERA_DEVICE_NAMES)
-    if type(source_index) is not int or source_index not in allowed_sources:
-        return jsonify({"error": "Select either Logi C270 HD WebCam or Web Camera"}), 400
+    selected_id = body.get("sourceId", body.get("sourceIndex"))
+    if isinstance(selected_id, str) and selected_id.lstrip("-").isdigit():
+        selected_id = int(selected_id)
+    if type(selected_id) not in (int, str) or selected_id not in SOURCE_VALUES:
+        return jsonify({"error": "Select a configured camera source"}), 400
+    if display_mirror and camera_id == 2:
+        return jsonify({"error": "Node B has no independent source during display-only mirror testing"}), 409
+    source_index = SOURCE_VALUES[selected_id]
 
     with workers_lock:
         current_worker = workers[camera_id]
@@ -398,7 +431,7 @@ def select_camera_source(camera_id: int):
 
         replacement_sources = {camera_id: source_index}
         for other_id, other_worker in workers.items():
-            if other_id != camera_id and other_worker.source == source_index:
+            if other_id != camera_id and other_worker.source == source_index and source_index != -1:
                 replacement_sources[other_id] = current_worker.source
 
         replacement_workers = {
@@ -465,10 +498,21 @@ def model():
 
 @app.get("/video/camera/<int:camera_id>")
 def video(camera_id: int):
-    worker = camera_worker(camera_id)
+    worker = camera_worker(1 if display_mirror and camera_id == 2 else camera_id)
     if worker is None:
         return jsonify({"error": "Camera not found"}), 404
-    return Response(worker.frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    return Response(worker.frames(), mimetype="multipart/x-mixed-replace; boundary=frame", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/video/raw/camera/<int:camera_id>")
+def raw_video(camera_id: int):
+    worker = camera_worker(1 if display_mirror and camera_id == 2 else camera_id)
+    if worker is None:
+        return jsonify({"error": "Camera not found"}), 404
+    if not worker.online:
+        return jsonify({"error": "Camera offline"}), 503
+    return Response(worker.raw_frames(), mimetype="multipart/x-mixed-replace; boundary=frame",
+                    headers={"Cache-Control": "no-store"})
 
 
 if __name__ == "__main__":

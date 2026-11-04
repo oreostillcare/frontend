@@ -45,7 +45,7 @@ class FakeCameraWorker:
         self.transaction_state_provider = transaction_state_provider
         self.started = False
         self.stopped = False
-        self.online = True
+        self.online = source not in (None, "", -1)
         self.detector = SimpleNamespace(model_online=True, model_type="dual", weights="trained_local.pt + yolov8n.pt")
         self.__class__.instances.append(self)
 
@@ -82,13 +82,20 @@ class FakeCameraWorker:
         }
 
     def frames(self):
-        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\nfake-jpeg\r\n"
+        yield f"--frame\r\nContent-Type: image/jpeg\r\n\r\nfake-jpeg-{self.camera_id}\r\n".encode()
+
+    def raw_frames(self):
+        yield f"--frame\r\nContent-Type: image/jpeg\r\n\r\nraw-jpeg-{self.camera_id}\r\n".encode()
 
 
 @pytest.fixture
-def app_module(monkeypatch):
+def app_module(monkeypatch, request):
     FakeCameraWorker.instances = []
     test_settings = SimpleNamespace(
+        node_b_display_mirror=getattr(request, "param", False),
+        camera_1_source="rtsp" if getattr(request, "param", False) else "usb",
+        esp32_control_enabled=getattr(request, "param", False),
+        esp32_heartbeat_enabled=getattr(request, "param", False),
         dv20_camera_index=2,
         logi_c270_camera_index=2,
         web_camera_index=1,
@@ -239,3 +246,53 @@ def test_unknown_video_camera_returns_404(client):
 def test_api_cors_allows_configured_frontend(client):
     response = client.get("/api/health", headers={"Origin": "http://frontend.test"})
     assert response.headers["Access-Control-Allow-Origin"] == "http://frontend.test"
+
+
+@pytest.mark.parametrize("app_module", [True], indirect=True)
+def test_display_mirror_never_activates_node_b_or_signal_io(app_module, client, monkeypatch):
+    import traffic_control
+    from unittest.mock import Mock
+
+    network = Mock(side_effect=AssertionError("Physical signal I/O reached"))
+    monkeypatch.setattr(traffic_control, "urlopen", network)
+    assert app_module.workers[1].source == "rtsp://camera-a.test/stream1"
+    assert app_module.workers[2].source == -1
+    assert not app_module.priority_controller.enabled
+    assert app_module.signal_controller._heartbeat_thread is None
+    assert not app_module.signal_controller._call("nodeA", "POST", "/command")["ok"]
+    payload = client.get("/api/system/status").get_json()
+    assert payload["cameraStatus"] == {"online": 1, "total": 2}
+    second = payload["cameras"][1]
+    assert second["testMirror"] and second["displayOnline"]
+    assert not second["online"] and not second["classes"] and not second["incomingVehicles"]
+    assert not app_module.read_node_points()["nodeB"]["ready"]
+    assert client.post("/api/cameras/2/source", json={"sourceIndex": 1}).status_code == 409
+    assert client.post("/api/local/reset-test-state").status_code == 409
+    assert b"fake-jpeg-1" in client.get("/video/camera/2").data
+    assert b"raw-jpeg-1" in client.get("/video/raw/camera/2").data
+    assert len(FakeCameraWorker.instances) == 2
+    html = client.get("/local").data
+    assert b"TEST ONLY: Camera A display mirror" in html
+    assert b"rtsp://camera-a.test" not in html
+    network.assert_not_called()
+
+
+def test_raw_video_is_separate_and_requires_online_camera(app_module, client):
+    assert b"raw-jpeg-1" in client.get("/video/raw/camera/1").data
+    assert b"fake-jpeg-1" in client.get("/video/camera/1").data
+    assert client.get("/video/raw/camera/99").status_code == 404
+    app_module.workers[1].online = False
+    assert client.get("/video/raw/camera/1").status_code == 503
+
+
+def test_source_switch_accepts_only_configured_catalog_and_keeps_usb_swap(app_module, client):
+    assert client.post("/api/cameras/1/source", json={"sourceId": "rtsp://untrusted/stream"}).status_code == 400
+    response = client.post("/api/cameras/1/source", json={"sourceId": "rtsp-1"})
+    assert response.status_code == 200
+    assert app_module.workers[1].source == "rtsp://camera-a.test/stream1"
+    assert b"rtsp://" not in response.data
+    assert response.get_json()["cameras"][0]["sourceName"] == "Tapo CCTV 1 (RTSP)"
+    response = client.post("/api/cameras/1/source", json={"sourceIndex": 2})
+    assert response.status_code == 200
+    assert app_module.workers[1].source == 2
+    assert app_module.workers[2].source == "rtsp://camera-a.test/stream1"

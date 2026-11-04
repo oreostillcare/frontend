@@ -1,5 +1,6 @@
 import copy
 import threading
+import time
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 import cv2
 
 from config import Settings
+from performance import DISABLED_PROFILER, StageProfiler
 from scoring import IncomingVehicleLedger
 from tracking import INCOMING, OUTGOING, TrackState, TrafficRegion
 from vehicle_identity import GlobalVehicleRegistry
@@ -174,12 +176,23 @@ class ModelSession:
     model: Any
     inference_lock: Any
     class_ids: list[int]
+    predictor: Any = None
 
 
 class ModelPool:
     """Loads each checkpoint once and creates tracker-isolated model sessions."""
 
     def __init__(self, config: Settings, load_local: bool = True, load_coco: bool = True):
+        self.config = config
+        self.backend = getattr(config, "inference_backend", "pytorch")
+        if self.backend not in {"pytorch", "openvino"}:
+            raise ValueError("INFERENCE_BACKEND must be pytorch or openvino")
+        if any(getattr(config, key, 0) < 0 for key in (
+            "cpu_inference_threads", "openvino_threads", "openvino_streams",
+        )):
+            raise ValueError("Thread and stream budgets must be nonnegative (0 keeps library defaults)")
+        self.compiled_models: dict[str, Any] = {}
+        self.compiled_lock = threading.RLock()
         self.paths = {
             "local": config.local_yolo_model,
             "coco": config.coco_yolo_model,
@@ -209,10 +222,18 @@ class ModelPool:
     def _load_checkpoint(self, yolo_class, name: str) -> None:
         path = self.paths[name]
         try:
-            if not path.is_file():
+            if self.backend == "openvino":
+                from openvino_artifacts import validate_export
+
+                path = getattr(self.config, f"{name}_openvino_model")
+                names = validate_export(path, self.paths[name], self.config.image_size)
+                model = yolo_class(str(path), task="detect")
+                model.overrides["device"] = "intel:cpu"
+            elif not path.is_file():
                 raise FileNotFoundError(f"Required YOLO model not found: {path}")
-            model = yolo_class(str(path))
-            names = {int(class_id): str(class_name).lower() for class_id, class_name in model.names.items()}
+            else:
+                model = yolo_class(str(path))
+                names = {int(class_id): str(class_name).lower() for class_id, class_name in model.names.items()}
             missing = self.allowed[name] - set(names.values())
             if missing:
                 raise ValueError(f"{path.name} is missing required classes: {sorted(missing)}")
@@ -237,10 +258,19 @@ class ModelPool:
         template = self.models[name]
         if template is None:
             return None
+        predictor = None
+        if self.backend == "openvino" or getattr(self.config, "cpu_inference_threads", 0):
+            from inference_runtime import predictor_factory
+
+            predictor = predictor_factory(self.config, self.compiled_models, self.compiled_lock, name)
+        session_model = self._tracker_session(template)
+        if getattr(self.config, "cpu_inference_threads", 0):
+            session_model.overrides["device"] = "cpu"
         return ModelSession(
-            model=self._tracker_session(template),
+            model=session_model,
             inference_lock=self.locks[name],
             class_ids=list(self.class_ids[name]),
+            predictor=predictor,
         )
 
     @property
@@ -251,6 +281,7 @@ class ModelPool:
         return {
             name: {
                 "weights": self.paths[name].name,
+                "backend": self.backend,
                 "online": self.models[name] is not None,
                 "error": self.errors.get(name),
             }
@@ -281,6 +312,7 @@ class Detector:
         vehicle_registry: GlobalVehicleRegistry | None = None,
     ):
         self.config = config
+        self.profiler = StageProfiler(getattr(config, "performance_profiling", False))
         self.camera_id: int | None = None
         self.track_state = TrackState(line, config.line_counting)
         self.vehicle_registry = vehicle_registry
@@ -330,16 +362,27 @@ class Detector:
         track_offset: int = 0,
         confidence: float | None = None,
     ) -> list[dict]:
+        profiler = getattr(self, "profiler", DISABLED_PROFILER)
+        prefix = "local" if session is getattr(self, "local_session", None) else "coco"
+        waiting_at = time.perf_counter() if profiler.enabled else 0.0
         with session.inference_lock:
-            results = session.model.track(
-                frame,
-                persist=True,
-                tracker="bytetrack.yaml",
-                classes=session.class_ids,
-                conf=self.config.confidence if confidence is None else confidence,
-                imgsz=self.config.image_size,
-                verbose=False,
-            )
+            if profiler.enabled:
+                profiler.values[f"{prefix}LockWaitMs"] = (time.perf_counter() - waiting_at) * 1000
+            with profiler.measure(f"{prefix}TrackCallMs"):
+                results = session.model.track(
+                    frame,
+                    persist=True,
+                    tracker="bytetrack.yaml",
+                    classes=session.class_ids,
+                    conf=self.config.confidence if confidence is None else confidence,
+                    imgsz=self.config.image_size,
+                    verbose=False,
+                    **({"predictor": session.predictor} if session.predictor is not None else {}),
+                )
+        if profiler.enabled:
+            speeds = [getattr(result, "speed", None) or {} for result in results]
+            if speeds and all("inference" in speed for speed in speeds):
+                profiler.values[f"{prefix}InferenceMs"] = sum(speed["inference"] for speed in speeds)
         detections = []
         for result in results:
             boxes = result.boxes
@@ -395,6 +438,8 @@ class Detector:
             self.class_last_seen.pop(track_id, None)
 
     def process(self, frame):
+        profiler = getattr(self, "profiler", DISABLED_PROFILER)
+        profiler.reset()
         incoming_ledger = getattr(self, "incoming_ledger", None)
         if incoming_ledger is None:
             incoming_ledger = IncomingVehicleLedger()
@@ -428,16 +473,20 @@ class Detector:
                 )
             )
 
-        self.stabilize_classes(detections)
-        region = camera_traffic_region(frame, self.config, getattr(self, "camera_id", None))
-        if region is None:
-            self.track_state.update(detections)
-        else:
-            self.track_state.update(detections, region)
+        with profiler.measure("lineTrackingMs"):
+            self.stabilize_classes(detections)
+            region = camera_traffic_region(frame, self.config, getattr(self, "camera_id", None))
+            if region is None:
+                self.track_state.update(detections)
+            else:
+                self.track_state.update(detections, region)
         vehicle_registry = getattr(self, "vehicle_registry", None)
-        if vehicle_registry is not None and self.camera_id is not None:
-            vehicle_registry.assign(self.camera_id, detections, frame)
-        incoming_ledger.update(detections)
+        with profiler.measure("identityMs"):
+            if vehicle_registry is not None and self.camera_id is not None:
+                vehicle_registry.assign(self.camera_id, detections, frame)
+        with profiler.measure("ledgerMs"):
+            incoming_ledger.update(detections)
+        drawing_at = time.perf_counter() if profiler.enabled else 0.0
         draw_camera_guides(frame, self.config, getattr(self, "camera_id", None))
         for item in detections:
             x1, y1, x2, y2 = item["boundingBox"]
@@ -464,4 +513,6 @@ class Detector:
             0.62,
             2,
         )
+        if profiler.enabled:
+            profiler.values["annotationMs"] = (time.perf_counter() - drawing_at) * 1000
         return frame, detections
