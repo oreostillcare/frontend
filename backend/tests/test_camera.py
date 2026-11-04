@@ -106,6 +106,29 @@ def test_open_capture_uses_configured_directshow_index(monkeypatch, worker):
     video_capture.assert_called_once_with(0, camera_module.cv2.CAP_DSHOW)
 
 
+@pytest.mark.parametrize("devices", [[], [{"index": 0, "name": "Other Webcam"}], None])
+def test_reconnect_refuses_changed_or_unavailable_usb_mapping(monkeypatch, worker, devices):
+    worker.usb_device_name = "Webcam A"
+    monkeypatch.setattr(camera_module, "enumerate_usb_devices", lambda: devices)
+    capture = Mock()
+    monkeypatch.setattr(camera_module.cv2, "VideoCapture", capture)
+    with pytest.raises(RuntimeError, match="mapping changed"):
+        worker._open_capture()
+    capture.assert_not_called()
+
+
+def test_usb_workers_have_independent_tracking_and_frame_buffers(monkeypatch, worker):
+    second = CameraWorker(2, 1, worker.config, worker.detector.line)
+    assert worker.detector is not second.detector
+    assert worker.detector.track_state is not second.detector.track_state
+    assert worker._raw_condition is not second._raw_condition
+    worker._raw_frame = np.ones((4, 4, 3), dtype=np.uint8)
+    worker._raw_version = 5
+    assert second._raw_frame is None and second._raw_version == 0
+    worker.detector.track_state.passed = 99
+    assert second.detector.track_state.passed == 12
+
+
 def test_rtsp_uses_ffmpeg_timeouts_and_masks_credentials(monkeypatch, worker):
     worker.source = "rtsp://user:secret@192.168.1.2:554/stream1"
     capture = Mock()

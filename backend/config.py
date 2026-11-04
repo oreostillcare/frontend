@@ -52,6 +52,8 @@ class Settings:
     camera_1_source: str = os.getenv("CAMERA_1_SOURCE", "usb").strip().lower()
     camera_2_source: str = os.getenv("CAMERA_2_SOURCE", "usb").strip().lower()
     node_b_display_mirror: bool = env_bool("ENABLE_NODE_B_DISPLAY_MIRROR", False)
+    # Independent of mirror mode. Local prototypes cannot operate roadside lights.
+    observation_only: bool = env_bool("SMARTROAD_OBSERVATION_ONLY", True)
     rtsp_timeout_ms: int = env_int("RTSP_TIMEOUT_MS", 5000)
     raw_stream_fps: float = env_float("RAW_STREAM_FPS", 10.0)
     camera_1_url: str = env_camera_url("CAMERA_1_RTSP_URL")

@@ -5,3 +5,4 @@ ultralytics
 lap>=0.5.12
 python-dotenv
 PyYAML
+pygrabber; sys_platform == "win32"

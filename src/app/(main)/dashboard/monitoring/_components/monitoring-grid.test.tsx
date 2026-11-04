@@ -28,6 +28,29 @@ function telemetry() {
 }
 
 describe("Live Monitoring camera views", () => {
+  it("keeps two independent raw USB feeds and their node metrics separate", () => {
+    vi.mocked(useTelemetry).mockReturnValue({
+      cameras: [
+        { id: 1, configured: true, online: true, testMirror: false, fps: 8, visibleVehicles: 3 },
+        { id: 2, configured: true, online: true, testMirror: false, fps: 7, visibleVehicles: 5 },
+      ],
+      system: null,
+      error: null,
+      loading: false,
+      refresh: vi.fn(),
+    });
+    render(<MonitoringGrid />);
+    expect(screen.getByAltText("Raw traffic feed for Camera 1").getAttribute("src")).toBe(
+      "/detection/video/raw/camera/1?attempt=0",
+    );
+    expect(screen.getByAltText("Raw traffic feed for Camera 2").getAttribute("src")).toBe(
+      "/detection/video/raw/camera/2?attempt=0",
+    );
+    expect(screen.queryByText("TEST MIRROR")).toBeNull();
+    expect(screen.getAllByText("3")).toHaveLength(1);
+    expect(screen.getAllByText("5")).toHaveLength(1);
+  });
+
   it("shows raw views and a test-only B display without copying A metrics", () => {
     telemetry();
     render(<MonitoringGrid />);

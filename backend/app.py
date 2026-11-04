@@ -14,8 +14,10 @@ from detector import ModelPool
 from traffic_control import Esp32SignalController, PointComparisonController
 from traffic_transactions import FirestoreTransactionWriter, TrafficTransactionManager
 from vehicle_identity import GlobalVehicleRegistry
+from usb_devices import enumerate_usb_devices, usb_catalog
 
 display_mirror = getattr(settings, "node_b_display_mirror", False)
+observation_only = display_mirror or getattr(settings, "observation_only", True)
 
 app = Flask(__name__)
 runtime_id = secrets.token_hex(8)
@@ -36,11 +38,7 @@ CAMERA_NODE_MAP = {
     2: {"nodeId": "node-b", "node": "Node B", "laneId": "lane-b", "lane": "Lane B"},
 }
 CAMERA_DEVICES = (
-    {
-        "index": getattr(settings, "logi_c270_camera_index", settings.dv20_camera_index),
-        "name": "Logi C270 HD WebCam",
-    },
-    {"index": settings.web_camera_index, "name": "Web Camera"},
+    *usb_catalog(settings, enumerate_usb_devices()),
     {"index": -1, "name": "Disabled"},
     *({"index": f"rtsp-{camera_id}", "name": f"Tapo CCTV {camera_id} (RTSP)"}
       for camera_id in (1, 2) if getattr(settings, f"camera_{camera_id}_url", "")),
@@ -96,7 +94,7 @@ vehicle_registry = GlobalVehicleRegistry(
 
 
 def create_camera_worker(camera_id: int, source: int | str) -> CameraWorker:
-    return CameraWorker(
+    worker = CameraWorker(
         camera_id,
         source,
         settings,
@@ -106,6 +104,12 @@ def create_camera_worker(camera_id: int, source: int | str) -> CameraWorker:
         detection_handler=transaction_manager.observe_detections,
         transaction_state_provider=transaction_manager.snapshot,
     )
+    # Recheck discovery on reconnect; an index may now point at another model.
+    worker.usb_device_name = next(
+        (device["name"] for device in CAMERA_DEVICES
+         if device["index"] == source and device.get("available") is True), None
+    )
+    return worker
 
 
 def reset_detection_state() -> None:
@@ -122,6 +126,9 @@ def reset_detection_state() -> None:
             wait_until_stopped = getattr(worker, "wait_until_stopped", None)
             if wait_until_stopped:
                 wait_until_stopped()
+            is_stopped = getattr(worker, "is_stopped", None)
+            if is_stopped and not is_stopped():
+                raise RuntimeError("Previous camera worker is still stopping")
 
         transaction_manager.reset()
         vehicle_registry.reset()
@@ -162,10 +169,10 @@ class MirrorSafeSignals(Esp32SignalController):
     def _call(self, *args, **kwargs):
         # Includes reset/supervisor paths: disabling automatic scheduling alone
         # would not block manual all-red commands during visual-only tests.
-        return {"ok": False, "error": "ESP32 I/O disabled during display mirror testing"}
+        return {"ok": False, "error": "ESP32 I/O disabled during observation-only testing"}
 
 
-signal_controller = (MirrorSafeSignals if display_mirror else Esp32SignalController)(
+signal_controller = (MirrorSafeSignals if observation_only else Esp32SignalController)(
     node_a_ip=getattr(settings, "esp32_node_a_ip", "192.168.1.220"),
     node_b_ip=getattr(settings, "esp32_node_b_ip", "192.168.1.221"),
     timeout_seconds=getattr(settings, "esp32_timeout_seconds", 1.25),
@@ -173,7 +180,7 @@ signal_controller = (MirrorSafeSignals if display_mirror else Esp32SignalControl
     heartbeat_interval_seconds=getattr(settings, "esp32_heartbeat_interval_seconds", 2.0),
     heartbeat_timeout_seconds=getattr(settings, "esp32_heartbeat_timeout_seconds", 5.0),
 )
-if not display_mirror and getattr(settings, "esp32_heartbeat_enabled", False):
+if not observation_only and getattr(settings, "esp32_heartbeat_enabled", False):
     signal_controller.start_heartbeat()
 transaction_writer = FirestoreTransactionWriter(
     endpoint=getattr(
@@ -183,13 +190,13 @@ transaction_writer = FirestoreTransactionWriter(
     ),
     secret=getattr(settings, "traffic_ingest_secret", ""),
     timeout_seconds=getattr(settings, "traffic_firestore_timeout_seconds", 5.0),
-    enabled=getattr(settings, "traffic_firestore_enabled", False),
+    enabled=not observation_only and getattr(settings, "traffic_firestore_enabled", False),
 )
 priority_controller = PointComparisonController(
     read_points=read_node_points,
     signal_controller=signal_controller,
     interval_seconds=getattr(settings, "traffic_comparison_interval_seconds", 1.0),
-    enabled=not display_mirror and getattr(settings, "esp32_control_enabled", False),
+    enabled=not observation_only and getattr(settings, "esp32_control_enabled", False),
     transaction_manager=transaction_manager,
     transaction_writer=transaction_writer,
 )
@@ -220,6 +227,7 @@ def local_monitor():
         camera_devices=CAMERA_DEVICES,
         camera_sources={key: source_id(value) for key, value in camera_sources.items()},
         display_mirror=display_mirror,
+        observation_only=observation_only,
         detection_fps=settings.detection_fps,
         line_counting=settings.line_counting,
         reset_available=bool(os.getenv("LOCAL_SUPERVISOR_URL") and os.getenv("LOCAL_RESET_PIN")),
@@ -287,8 +295,8 @@ def local_runtime():
 
 @app.post("/api/local/reset-test-state")
 def reset_test_state():
-    if display_mirror:
-        return jsonify({"error": "Signal reset is disabled during display-only mirror testing"}), 409
+    if observation_only:
+        return jsonify({"error": "Signal reset is disabled during observation-only testing"}), 409
     origin = request.headers.get("Origin")
     if origin and origin.rstrip("/") != request.host_url.rstrip("/"):
         return jsonify({"error": "Reset must be requested from this console"}), 403
@@ -395,6 +403,7 @@ def system_status():
             "nodeB": node_payload("nodeB", cameras_by_id[NODE_CAMERA_MAP["nodeB"]]),
             "esp32Status": signal_controller.heartbeat_snapshot(),
             "trafficControl": priority_controller.snapshot(),
+            "observationOnly": observation_only,
         }
     )
 
@@ -409,12 +418,19 @@ def cameras():
     return jsonify([camera_payload(camera_id) for camera_id in sorted(workers)])
 
 
+@app.get("/api/cameras/sources")
+def camera_source_catalog():
+    return jsonify({"sources": CAMERA_DEVICES})
+
+
 @app.post("/api/cameras/<int:camera_id>/source")
 def select_camera_source(camera_id: int):
     if camera_id not in CAMERA_NODE_MAP:
         return jsonify({"error": "Camera not found"}), 404
 
-    body = request.get_json(silent=True) or {}
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "Select a configured camera source"}), 400
     selected_id = body.get("sourceId", body.get("sourceIndex"))
     if isinstance(selected_id, str) and selected_id.lstrip("-").isdigit():
         selected_id = int(selected_id)
@@ -432,7 +448,7 @@ def select_camera_source(camera_id: int):
         replacement_sources = {camera_id: source_index}
         for other_id, other_worker in workers.items():
             if other_id != camera_id and other_worker.source == source_index and source_index != -1:
-                replacement_sources[other_id] = current_worker.source
+                return jsonify({"error": "Source already assigned to the other node; disable it first"}), 409
 
         replacement_workers = {
             item: create_camera_worker(item, source)
@@ -444,6 +460,9 @@ def select_camera_source(camera_id: int):
             wait_until_stopped = getattr(workers[item], "wait_until_stopped", None)
             if wait_until_stopped:
                 wait_until_stopped()
+            is_stopped = getattr(workers[item], "is_stopped", None)
+            if is_stopped and not is_stopped():
+                return jsonify({"error": "Previous camera worker is still stopping; retry later"}), 503
         workers.update(replacement_workers)
         camera_sources.update(replacement_sources)
         for worker in replacement_workers.values():

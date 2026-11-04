@@ -8,6 +8,7 @@ import pytest
 import camera as camera_module
 import config as config_module
 import detector as detector_module
+import usb_devices
 
 
 class FakeModelPool:
@@ -92,10 +93,13 @@ class FakeCameraWorker:
 def app_module(monkeypatch, request):
     FakeCameraWorker.instances = []
     test_settings = SimpleNamespace(
+        observation_only=True,
         node_b_display_mirror=getattr(request, "param", False),
         camera_1_source="rtsp" if getattr(request, "param", False) else "usb",
-        esp32_control_enabled=getattr(request, "param", False),
-        esp32_heartbeat_enabled=getattr(request, "param", False),
+        # Deliberately unsafe legacy flags: the independent test guard must win.
+        esp32_control_enabled=True,
+        esp32_heartbeat_enabled=True,
+        traffic_firestore_enabled=True,
         dv20_camera_index=2,
         logi_c270_camera_index=2,
         web_camera_index=1,
@@ -115,6 +119,9 @@ def app_module(monkeypatch, request):
     monkeypatch.setattr(camera_module, "CameraWorker", FakeCameraWorker)
     monkeypatch.setattr(detector_module, "ModelPool", FakeModelPool)
     monkeypatch.setattr(config_module, "settings", test_settings)
+    monkeypatch.setattr(usb_devices, "enumerate_usb_devices", lambda: [
+        {"index": 1, "name": "Webcam A"}, {"index": 2, "name": "Webcam B"},
+    ])
     sys.modules.pop("app", None)
     module = importlib.import_module("app")
     module.app.config.update(TESTING=True)
@@ -285,7 +292,7 @@ def test_raw_video_is_separate_and_requires_online_camera(app_module, client):
     assert client.get("/video/raw/camera/1").status_code == 503
 
 
-def test_source_switch_accepts_only_configured_catalog_and_keeps_usb_swap(app_module, client):
+def test_source_switch_rejects_duplicate_instead_of_silently_swapping(app_module, client):
     assert client.post("/api/cameras/1/source", json={"sourceId": "rtsp://untrusted/stream"}).status_code == 400
     response = client.post("/api/cameras/1/source", json={"sourceId": "rtsp-1"})
     assert response.status_code == 200
@@ -293,6 +300,64 @@ def test_source_switch_accepts_only_configured_catalog_and_keeps_usb_swap(app_mo
     assert b"rtsp://" not in response.data
     assert response.get_json()["cameras"][0]["sourceName"] == "Tapo CCTV 1 (RTSP)"
     response = client.post("/api/cameras/1/source", json={"sourceIndex": 2})
-    assert response.status_code == 200
+    assert response.status_code == 409
+    assert app_module.workers[1].source == "rtsp://camera-a.test/stream1"
+    assert app_module.workers[2].source == 2
+    assert client.post("/api/cameras/2/source", json={"sourceIndex": -1}).status_code == 200
+    assert client.post("/api/cameras/1/source", json={"sourceIndex": 2}).status_code == 200
     assert app_module.workers[1].source == 2
-    assert app_module.workers[2].source == "rtsp://camera-a.test/stream1"
+    assert app_module.workers[2].source == -1
+
+
+def test_dual_usb_observation_guard_blocks_all_signal_and_upload_paths(app_module, client, monkeypatch):
+    from unittest.mock import Mock
+    import traffic_control
+    import traffic_transactions
+
+    network = Mock(side_effect=AssertionError("External write attempted"))
+    monkeypatch.setattr(traffic_control, "urlopen", network)
+    monkeypatch.setattr(traffic_transactions, "urlopen", network)
+    assert not app_module.display_mirror
+    assert app_module.observation_only
+    assert not app_module.priority_controller.enabled
+    assert not app_module.transaction_writer.enabled
+    assert app_module.signal_controller._heartbeat_thread is None
+    for node in ("nodeA", "nodeB"):
+        assert not app_module.signal_controller._call(node, "POST", "/command")["ok"]
+    assert not app_module.signal_controller.apply("nodeA")["success"]
+    app_module.signal_controller.heartbeat_once()
+    app_module.transaction_writer.write({"test": True})
+    assert client.post("/api/local/reset-test-state").status_code == 409
+    assert client.get("/api/system/status").get_json()["observationOnly"] is True
+    network.assert_not_called()
+
+
+def test_discovered_sources_and_dual_usb_console(client):
+    catalog = client.get("/api/cameras/sources").get_json()["sources"]
+    assert catalog[:2] == [
+        {"index": 1, "name": "Webcam A", "available": True},
+        {"index": 2, "name": "Webcam B", "available": True},
+    ]
+    html = client.get("/local").data
+    assert b"TEST ONLY: Camera A display mirror" not in html
+    assert b"Observation only" in html
+    assert b"/video/camera/1" in html and b"/video/camera/2" in html
+    assert b"fake-jpeg-1" in client.get("/video/camera/1").data
+    assert b"fake-jpeg-2" in client.get("/video/camera/2").data
+    assert b"raw-jpeg-2" in client.get("/video/raw/camera/2").data
+
+
+def test_source_switch_waits_for_capture_release(app_module, client):
+    from unittest.mock import Mock
+
+    original = app_module.workers[1]
+    original.is_stopped = Mock(return_value=False)
+    response = client.post("/api/cameras/1/source", json={"sourceId": "rtsp-1"})
+    assert response.status_code == 503
+    assert app_module.workers[1] is original
+    assert not FakeCameraWorker.instances[-1].started
+
+
+@pytest.mark.parametrize("body", [[], [1], "usb", True, None])
+def test_invalid_source_selection_body(client, body):
+    assert client.post("/api/cameras/1/source", json=body).status_code == 400

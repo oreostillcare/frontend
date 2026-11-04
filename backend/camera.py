@@ -8,6 +8,7 @@ from config import Settings, mask_rtsp_url
 from detector import Detector, ModelPool, VEHICLE_CLASSES, draw_annotation_text
 from performance import PROCESS_SAMPLER, StageProfiler
 from vehicle_identity import GlobalVehicleRegistry
+from usb_devices import enumerate_usb_devices
 
 
 class CameraWorker:
@@ -26,6 +27,7 @@ class CameraWorker:
     ):
         self.camera_id = camera_id
         self.source = source
+        self.usb_device_name: str | None = None
         self.config = config
         self.detector = Detector(
             config,
@@ -112,6 +114,11 @@ class CameraWorker:
             if worker_thread and worker_thread is not current_thread:
                 worker_thread.join(timeout=timeout)
 
+    def is_stopped(self) -> bool:
+        return not any(thread and thread.is_alive() for thread in (
+            self._capture_thread, self._processing_thread, self._raw_stream_thread,
+        ))
+
     @staticmethod
     def _smoothed_fps(previous: float, instant: float) -> float:
         value = instant if previous <= 0 else (previous * 0.8) + (instant * 0.2)
@@ -129,6 +136,11 @@ class CameraWorker:
             return cv2.VideoCapture(self.source, cv2.CAP_FFMPEG, [
                 cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout, cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout,
             ])
+        if self.usb_device_name is not None:
+            devices = enumerate_usb_devices()
+            actual = next((device["name"] for device in devices or [] if device["index"] == self.source), None)
+            if actual != self.usb_device_name:
+                raise RuntimeError("USB device mapping changed; rediscover sources and restart")
         return cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
 
     def _capture_errors(self) -> tuple[str, str]:
