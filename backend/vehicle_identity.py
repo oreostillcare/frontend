@@ -188,7 +188,12 @@ class GlobalVehicleRegistry:
                     "INCOMING",
                     "OUTGOING",
                 )
-                if vehicle_id is None and not identity_eligible and not detection.get("redTransition"):
+                if (
+                    vehicle_id is None
+                    and not identity_eligible
+                    and not detection.get("redTransition")
+                    and not detection.get("redBoundaryTransition")
+                ):
                     detection["vehicleId"] = None
                     continue
 
@@ -247,7 +252,7 @@ class GlobalVehicleRegistry:
                 detection["vehicleId"] = vehicle_id
                 assigned_vehicle_ids.add(vehicle_id)
 
-                if detection.get("redTransition"):
+                if detection.get("redTransition") or detection.get("redBoundaryTransition"):
                     observation = self._observations[observation_key]
                     self._departures[vehicle_id] = DepartureCandidate(
                         vehicle_id=vehicle_id,

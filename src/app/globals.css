@@ -141,6 +141,36 @@ These serve as the fallback; there is no separate default.css file. */
   }
 }
 
+.smartroad-map-popup .maplibregl-popup-content {
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 30%);
+  color: var(--popover-foreground);
+}
+
+.smartroad-map-popup .maplibregl-popup-tip {
+  border-top-color: var(--popover);
+  border-bottom-color: var(--popover);
+}
+
+.smartroad-map-popup .maplibregl-popup-close-button {
+  color: var(--popover-foreground);
+  font-size: 18px;
+  padding: 2px 6px;
+}
+
+@keyframes smartroad-node-pulse {
+  0%,
+  100% {
+    box-shadow: 0 2px 6px rgb(0 0 0 / 40%);
+  }
+
+  50% {
+    box-shadow: 0 0 0 8px rgb(220 38 38 / 25%), 0 2px 8px rgb(0 0 0 / 50%);
+  }
+}
+
 @layer utilities {
   [data-theme-preset]:not([data-theme-preset="default"]) .shadow-2xs {
     box-shadow: var(--shadow-2xs);

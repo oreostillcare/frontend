@@ -113,6 +113,7 @@ class Settings:
     esp32_heartbeat_interval_seconds: float = env_float("ESP32_HEARTBEAT_INTERVAL_SECONDS", 2.0)
     esp32_heartbeat_timeout_seconds: float = env_float("ESP32_HEARTBEAT_TIMEOUT_SECONDS", 5.0)
     traffic_comparison_interval_seconds: float = env_float("TRAFFIC_COMPARISON_INTERVAL_SECONDS", 1.0)
+    timer_batching_enabled: bool = env_bool("ENABLE_TIMER_BATCHING", True)
     traffic_outgoing_confirmation_frames: int = env_int("TRAFFIC_OUTGOING_CONFIRMATION_FRAMES", 3)
     traffic_outgoing_confirmation_seconds: float = env_float(
         "TRAFFIC_OUTGOING_CONFIRMATION_SECONDS",

@@ -48,7 +48,7 @@ function completedCycle() {
   };
 }
 
-function request(body = completedCycle(), secret = "test-secret") {
+function request(body: unknown = completedCycle(), secret = "test-secret") {
   return new Request("http://localhost/api/traffic/transactions", {
     method: "POST",
     headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
@@ -90,5 +90,60 @@ describe("completed-cycle ingestion remains unchanged", () => {
     const response = await POST(request());
     expect(response.status).toBe(500);
     expect(await response.json()).toMatchObject({ success: false });
+  });
+
+  it("stores a cleared timer batch with no entries after inactivity", async () => {
+    const cycle = completedCycle();
+    const response = await POST(request({
+      ...cycle,
+      batchTotal: 0,
+      batchPoints: 0,
+      releasedVehicles: [],
+      decisionMode: "TIMER",
+      timerDurationSeconds: 60,
+      greenEndedAt: cycle.completedAt,
+      enteredCount: 0,
+      exitedCount: 0,
+      endReason: "incoming_inactivity",
+      unusedGreenSeconds: 45,
+    }));
+    expect(response.status).toBe(200);
+    expect(firestore.set.mock.calls[0][1]).toMatchObject({
+      decisionMode: "TIMER", enteredCount: 0, exitedCount: 0, unusedGreenSeconds: 45,
+    });
+  });
+
+  it("rejects a timer batch whose entry and exit totals disagree", async () => {
+    const cycle = completedCycle();
+    const response = await POST(request({
+      ...cycle,
+      decisionMode: "TIMER",
+      timerDurationSeconds: 60,
+      greenEndedAt: cycle.completedAt,
+      enteredCount: 1,
+      exitedCount: 0,
+    }));
+    expect(response.status).toBe(400);
+    expect(firestore.commit).not.toHaveBeenCalled();
+  });
+
+  it("chunks large timer batches and writes their parent after the events", async () => {
+    const cycle = completedCycle();
+    const vehicles = Array.from({ length: 401 }, (_, index) => ({
+      ...cycle.releasedVehicles[0], gid: `vehicle-${index}`,
+    }));
+    const response = await POST(request({
+      ...cycle,
+      batchTotal: vehicles.length,
+      releasedVehicles: vehicles,
+      decisionMode: "TIMER",
+      timerDurationSeconds: 60,
+      greenEndedAt: cycle.completedAt,
+      enteredCount: vehicles.length,
+      exitedCount: vehicles.length,
+    }));
+    expect(response.status).toBe(200);
+    expect(firestore.commit).toHaveBeenCalledTimes(2);
+    expect(firestore.set.mock.calls.at(-1)?.[0]).toBe("trafficTransactions/cycle-1");
   });
 });

@@ -334,8 +334,9 @@ class CameraWorker:
 
         if transaction is not None:
             if transaction["sourceKey"] == node_key:
-                total_vehicles = transaction["sourceRemaining"]
-                count_state = "LOCKED BATCH"
+                timer_batch = transaction.get("decisionMode") == "TIMER"
+                total_vehicles = transaction.get("enteredCount", 0) if timer_batch else transaction["sourceRemaining"]
+                count_state = "TIMER BATCH" if timer_batch else "LOCKED BATCH"
             elif transaction["destinationKey"] == node_key:
                 expected_vehicles = transaction["destinationRemaining"]
                 count_state = "EXPECTING"

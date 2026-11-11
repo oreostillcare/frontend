@@ -12,7 +12,8 @@ from camera import CameraWorker
 from config import settings
 from detector import ModelPool
 from traffic_control import Esp32SignalController, PointComparisonController
-from traffic_transactions import FirestoreTransactionWriter, TrafficTransactionManager
+from traffic_transactions import FirestoreTransactionWriter
+from timer_batches import TimerBatchManager
 from vehicle_identity import GlobalVehicleRegistry
 from usb_devices import enumerate_usb_devices, usb_catalog
 
@@ -70,7 +71,8 @@ if camera_sources[1] not in (None, "", -1) and camera_sources[1] == camera_sourc
     raise ValueError("Two nodes must not share a physical input; use display-only mirror mode")
 
 model_pool = ModelPool(settings)
-transaction_manager = TrafficTransactionManager(
+transaction_manager = TimerBatchManager(
+    timer_enabled=getattr(settings, "timer_batching_enabled", True),
     outgoing_confirmation_frames=getattr(settings, "traffic_outgoing_confirmation_frames", 3),
     outgoing_confirmation_seconds=getattr(
         settings,
@@ -157,10 +159,12 @@ def read_node_points() -> dict:
         vehicles, _ = ledger.snapshot() if ledger else ([], 0)
         vehicles = transaction_manager.next_batch_candidates(node_name, vehicles)
         points = sum(int(vehicle.get("points") or 0) for vehicle in vehicles)
+        queue = transaction_manager.queue_view(camera_id)
         node_scores[node_name] = {
             "points": points,
             "vehicles": vehicles,
-            "ready": bool(worker.online and worker.detector.model_online),
+            "behindGreenVehicles": queue["behindGreenVehicles"],
+            "ready": bool(worker.online and worker.detector.model_online and queue["fresh"]),
         }
     return node_scores
 
@@ -264,7 +268,12 @@ def node_payload(node_name: str, camera: dict | None = None) -> dict:
     camera = camera or camera_payload(camera_id)
     control = priority_controller.snapshot()
     node_control = control[node_name]
+    transaction = control.get("transaction")
+    timer_active = bool(
+        transaction and transaction.get("decisionMode") == "TIMER" and transaction["sourceKey"] == node_name
+    )
     return {
+        **({"remainingSeconds": transaction["timerRemainingSeconds"], "durationSeconds": 60} if timer_active else {}),
         "signal": node_control["signal"],
         "cameraId": camera_id,
         "nodeId": camera["nodeId"],
@@ -278,7 +287,7 @@ def node_payload(node_name: str, camera: dict | None = None) -> dict:
         "totalVehicles": camera["totalVehicles"],
         "expectedVehicles": camera["expectedVehicles"],
         "vehicleCountState": camera["vehicleCountState"],
-        "mode": control["mode"],
+        "mode": transaction.get("decisionMode", control["mode"]) if transaction else control["mode"],
         "status": control["commandedState"],
     }
 

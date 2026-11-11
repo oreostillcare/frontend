@@ -82,7 +82,10 @@ class TrackState:
         region: TrafficRegion,
     ) -> None:
         in_region = region.contains(center)
-        role = self._update_motion_role(track_id, center, region) if in_region else None
+        # Measure approach/boundary motion outside the scoring region too, while
+        # leaving the existing weighted trafficRole scope unchanged.
+        motion_role = self._update_motion_role(track_id, center, region)
+        role = motion_role if in_region else None
         green_transition = False
         red_transition = False
         red_line_touched = False
@@ -133,6 +136,14 @@ class TrackState:
         detection.update(
             {
                 "inTrafficZone": in_region,
+                "behindGreenIncoming": (
+                    center[1] < region.green_y and self.stable_roles.get(track_id) == INCOMING
+                ),
+                "redBoundaryTransition": (
+                    previous is not None
+                    and previous[1] < region.red_y <= center[1]
+                    and self.stable_roles.get(track_id) == INCOMING
+                ),
                 "trafficRole": role,
                 "greenCrossed": track_id in self.green_crossed_ids,
                 "redCrossed": track_id in self.counted_ids,

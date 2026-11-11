@@ -56,5 +56,10 @@ service cloud.firestore {
       allow read: if activeStaff();
       allow write: if false;
     }
+
+    match /nodeSessionLogs/{logId} {
+      allow read: if activeStaff();
+      allow write: if false;
+    }
   }
 }

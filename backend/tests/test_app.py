@@ -146,6 +146,19 @@ def test_import_starts_two_independent_usb_workers(app_module):
     assert FakeCameraWorker.instances[0].vehicle_registry is FakeCameraWorker.instances[1].vehicle_registry
 
 
+def test_timer_countdown_is_exposed_to_website_without_enabling_signal_io(app_module):
+    manager = app_module.transaction_manager
+    manager.begin_timer("nodeA", [{"gid": "timer-test", "trackId": 1, "class": "car", "points": 4}])
+    manager.activate()
+    payload = app_module.app.test_client().get("/api/system/status").get_json()
+    assert payload["observationOnly"] is True
+    assert payload["trafficControl"]["enabled"] is False
+    assert payload["nodeA"]["mode"] == "TIMER"
+    assert 0 < payload["nodeA"]["remainingSeconds"] <= 60
+    assert "remainingSeconds" not in payload["nodeB"]
+    assert payload["trafficControl"]["transaction"]["enteredCount"] == 0
+
+
 def test_root_redirects_to_local_monitor(client):
     response = client.get("/")
     assert response.status_code == 302

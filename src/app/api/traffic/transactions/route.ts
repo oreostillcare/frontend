@@ -27,7 +27,14 @@ const releasedVehicleSchema = z.object({
 const trafficTransactionSchema = z
   .object({
     batchPoints: z.number().int().min(0),
-    batchTotal: z.number().int().positive().max(400),
+    batchTotal: z.number().int().nonnegative(),
+    decisionMode: z.enum(["WEIGHTED", "TIMER"]).default("WEIGHTED"),
+    enteredCount: z.number().int().nonnegative().optional(),
+    exitedCount: z.number().int().nonnegative().optional(),
+    timerDurationSeconds: z.literal(60).optional(),
+    greenEndedAt: timestampSchema.optional(),
+    unusedGreenSeconds: z.number().int().min(0).max(60).optional(),
+    endReason: z.enum(["timer_expired", "incoming_inactivity", "weighted_batch_released"]).optional(),
     completedAt: timestampSchema,
     createdAt: timestampSchema,
     destinationKey: z.enum(["nodeA", "nodeB"]),
@@ -43,6 +50,28 @@ const trafficTransactionSchema = z
     transactionId: z.string().min(1),
   })
   .superRefine((transaction, context) => {
+    if (
+      transaction.decisionMode === "TIMER" &&
+      (transaction.enteredCount === undefined ||
+        transaction.exitedCount === undefined ||
+        transaction.timerDurationSeconds !== 60 ||
+        transaction.greenEndedAt === undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Timer batches require counts and admission timing.",
+        path: ["decisionMode"],
+      });
+    }
+    if (transaction.decisionMode === "WEIGHTED" && transaction.batchTotal === 0) {
+      context.addIssue({ code: "custom", message: "Weighted batches require vehicles.", path: ["batchTotal"] });
+    }
+    if (
+      (transaction.enteredCount !== undefined && transaction.enteredCount !== transaction.batchTotal) ||
+      (transaction.exitedCount !== undefined && transaction.exitedCount !== transaction.batchTotal)
+    ) {
+      context.addIssue({ code: "custom", message: "Batch entry/exit counts must reconcile.", path: ["enteredCount"] });
+    }
     if (transaction.releasedVehicles.length !== transaction.batchTotal) {
       context.addIssue({
         code: "custom",
@@ -116,7 +145,8 @@ export async function POST(request: Request) {
   const transactionId = safeDocumentId(transaction.transactionId);
 
   try {
-    const batch = adminDb.batch();
+    let batch = adminDb.batch();
+    let pendingEvents = 0;
     const releasedVehicles = transaction.releasedVehicles.map((vehicle) => ({
       ...vehicle,
       destinationConfirmedAt: asTimestamp(vehicle.destinationConfirmedAt),
@@ -125,21 +155,27 @@ export async function POST(request: Request) {
       sourceReleasedAt: asTimestamp(vehicle.sourceReleasedAt),
     }));
 
-    batch.set(
-      adminDb.collection("trafficTransactions").doc(transactionId),
-      {
-        ...transaction,
-        completedAt: asTimestamp(transaction.completedAt),
-        createdAt: asTimestamp(transaction.createdAt),
-        greenStartedAt: asTimestamp(transaction.greenStartedAt),
-        releasedVehicles,
-        schemaVersion: 1,
-        source: "live-transaction",
-        sourceCompletedAt: asTimestamp(transaction.sourceCompletedAt),
-        storedAt: Timestamp.now(),
-      },
-      { merge: true },
-    );
+    const writeTransaction = () =>
+      batch.set(
+        adminDb.collection("trafficTransactions").doc(transactionId),
+        {
+          ...transaction,
+          completedAt: asTimestamp(transaction.completedAt),
+          createdAt: asTimestamp(transaction.createdAt),
+          greenStartedAt: asTimestamp(transaction.greenStartedAt),
+          greenEndedAt: asTimestamp(transaction.greenEndedAt ?? null),
+          releasedVehicles,
+          schemaVersion: 2,
+          source: "live-transaction",
+          sourceCompletedAt: asTimestamp(transaction.sourceCompletedAt),
+          storedAt: Timestamp.now(),
+        },
+        { merge: true },
+      );
+    // Preserve a single atomic write for normal batches. Larger timer batches
+    // use idempotent event IDs and publish their parent only after all chunks.
+    const largeBatch = releasedVehicles.length > 400;
+    if (!largeBatch) writeTransaction();
 
     for (const vehicle of releasedVehicles) {
       const eventId = safeDocumentId(`${transaction.transactionId}_${vehicle.gid}`);
@@ -165,13 +201,21 @@ export async function POST(request: Request) {
           sourceDetectedAt: vehicle.sourceDetectedAt,
           sourceTrackId: vehicle.sourceTrackId,
           transactionId: transaction.transactionId,
+          decisionMode: transaction.decisionMode,
           vehicleClass: vehicle.class,
           vehicleId: vehicle.gid,
         },
         { merge: true },
       );
+      pendingEvents += 1;
+      if (largeBatch && pendingEvents === 400) {
+        await batch.commit();
+        batch = adminDb.batch();
+        pendingEvents = 0;
+      }
     }
 
+    if (largeBatch) writeTransaction();
     await batch.commit();
     return Response.json({
       success: true,

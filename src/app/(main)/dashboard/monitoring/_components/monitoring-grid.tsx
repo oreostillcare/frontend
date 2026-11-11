@@ -8,6 +8,9 @@ import { useTelemetry } from "@/hooks/use-telemetry";
 import { rawVideoUrl, videoUrl } from "@/lib/api/client";
 import type { CameraStatus } from "@/lib/api/types";
 
+import { LiveMap } from "./live-map";
+import { SessionLogs } from "./session-logs";
+
 function CameraCard({ camera, id }: { camera?: CameraStatus; id: number }) {
   const [streamError, setStreamError] = useState(false);
   const [streamAttempt, setStreamAttempt] = useState(0);
@@ -113,6 +116,7 @@ export function MonitoringGrid() {
   const { cameras, error } = useTelemetry();
   const hasTestMirror = cameras.some((camera) => camera.testMirror);
   const displayedCameras: Array<CameraStatus | undefined> = cameras.length ? cameras : [undefined, undefined];
+
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -130,6 +134,8 @@ export function MonitoringGrid() {
           return <CameraCard id={cameraId} camera={camera} key={cameraId} />;
         })}
       </div>
+      <LiveMap />
+      <SessionLogs />
     </div>
   );
 }

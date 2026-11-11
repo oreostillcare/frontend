@@ -12,6 +12,8 @@ NODE_B = "nodeB"
 ALL_RED = "allRed"
 RED = "RED"
 GREEN = "GREEN"
+YELLOW = "YELLOW"
+YELLOW_COMMANDS = {NODE_A: "nodeAYellow", NODE_B: "nodeBYellow"}
 UNKNOWN = "UNKNOWN"
 
 
@@ -207,6 +209,8 @@ class Esp32SignalController:
             return {node_key: future.result() for node_key, future in futures.items()}
 
     def apply(self, command: str) -> dict:
+        if command in YELLOW_COMMANDS.values():
+            return self._apply_yellow(command)
         if command not in (NODE_A, NODE_B, ALL_RED):
             return {"success": False, "error": "Invalid traffic command", "nodes": {}}
 
@@ -248,6 +252,8 @@ class Esp32SignalController:
 
     def refresh(self, command: str) -> dict:
         """Refresh an already verified state without briefly turning the winner red."""
+        if command in YELLOW_COMMANDS.values():
+            return self._apply_yellow(command)
         if command not in (NODE_A, NODE_B, ALL_RED):
             return {"success": False, "error": "Invalid traffic command", "nodes": {}}
         if command == ALL_RED:
@@ -280,6 +286,25 @@ class Esp32SignalController:
                 "commandedState": f"{self.nodes[command]['name']} GREEN",
                 "nodes": node_results,
                 "error": None,
+            }
+
+    def _apply_yellow(self, command: str) -> dict:
+        active = next(node for node, yellow_command in YELLOW_COMMANDS.items() if command == yellow_command)
+        opposite = NODE_B if active == NODE_A else NODE_A
+        with self._command_lock:
+            red = self._set_node_state(opposite, RED)
+            nodes = {opposite: red}
+            if not red["success"]:
+                return {
+                    "success": False, "commandedState": "OPPOSITE RED NOT VERIFIED",
+                    "nodes": nodes, "error": "Opposite node must confirm RED before YELLOW",
+                }
+            yellow = self._set_node_state(active, YELLOW)
+            nodes[active] = yellow
+            return {
+                "success": yellow["success"],
+                "commandedState": f"{self.nodes[active]['name']} YELLOW" if yellow["success"] else "YELLOW REQUEST FAILED",
+                "nodes": nodes, "error": yellow["error"],
             }
 
 
@@ -361,8 +386,31 @@ class PointComparisonController:
             result = self.signal_controller.refresh(command)
         self._applied_command = command if result["success"] else None
 
+        observed_transaction = (
+            self.transaction_manager.snapshot_active() if self.transaction_manager is not None else None
+        )
+        if observed_transaction and observed_transaction["status"] == "anomaly" and command != ALL_RED:
+            result = self.signal_controller.apply(ALL_RED)
+            command = ALL_RED
+            self._applied_command = ALL_RED if result["success"] else None
+            reason = observed_transaction.get("anomaly", "Batch requires review")
+
+        if not result["success"] and hasattr(self.transaction_manager, "fault"):
+            self.transaction_manager.fault(result.get("error") or "Signal acknowledgement failed")
+            failure = result.get("error")
+            result = self.signal_controller.apply(ALL_RED)
+            result["error"] = failure or result.get("error")
+            command = ALL_RED
+            self._applied_command = ALL_RED if result["success"] else None
+            reason = "Signal failure; batch requires review with both nodes RED"
+
         persistence_error = None
         if result["success"] and self.transaction_manager is not None:
+            if hasattr(self.transaction_manager, "yellow_confirmed"):
+                if command in YELLOW_COMMANDS.values():
+                    self.transaction_manager.yellow_confirmed()
+                elif command == ALL_RED:
+                    self.transaction_manager.red_confirmed()
             transaction = self.transaction_manager.snapshot_active()
             if transaction and transaction["status"] == "pending_green" and command == transaction["sourceKey"]:
                 self.transaction_manager.activate()
@@ -376,8 +424,9 @@ class PointComparisonController:
                     if write_result["success"]:
                         persisted = write_result.get("persisted", True)
                         completed = self.transaction_manager.mark_completed(persisted=persisted)
-                        action = "saved" if persisted else "completed locally (Firestore upload disabled)"
-                        reason = f"Transaction {completed['transactionId']} {action}; recalculating next cycle"
+                        if completed:
+                            action = "saved" if persisted else "completed locally (Firestore upload disabled)"
+                            reason = f"Transaction {completed['transactionId']} {action}; recalculating next cycle"
                     else:
                         persistence_error = write_result.get("error") or "Firestore write failed"
                         reason = "Transaction complete; keeping both nodes RED while Firestore retry is pending"
@@ -482,6 +531,8 @@ class PointComparisonController:
     def _choose_command(self, scores: dict, cameras_ready: bool) -> tuple[str, str]:
         if not cameras_ready:
             self._calculation_ready = False
+            if hasattr(self.transaction_manager, "fault"):
+                self.transaction_manager.fault("Camera/model observations are unavailable or stale; operator review required")
             return ALL_RED, "Both cameras and detection models must be online"
 
         if self.transaction_manager is None:
@@ -491,8 +542,19 @@ class PointComparisonController:
             winner = "Node A" if command == NODE_A else "Node B"
             return command, f"{winner} has more incoming points"
 
+        if hasattr(self.transaction_manager, "advance"):
+            self.transaction_manager.advance()
+        blocked_reason = self.transaction_manager.snapshot().get("blockedReason")
+        if blocked_reason:
+            return ALL_RED, blocked_reason
         transaction = self.transaction_manager.snapshot_active()
         if transaction is not None:
+            if transaction["status"] == "anomaly":
+                return ALL_RED, transaction.get("anomaly", "Batch requires operator review")
+            if transaction["status"] in {"yellow_pending", "yellow"}:
+                return YELLOW_COMMANDS[transaction["sourceKey"]], "Admission ended; yellow warning before both-red clearance"
+            if transaction.get("decisionMode") == "TIMER" and transaction["status"] in {"pending_green", "active"}:
+                return transaction["sourceKey"], "Timer admission active; weighted comparison bypassed"
             if transaction["status"] in {"pending_green", "active"} and transaction["sourceRemaining"] > 0:
                 return transaction["sourceKey"], (
                     f"Frozen {transaction['sourceNode']} batch: "
@@ -508,6 +570,21 @@ class PointComparisonController:
         if not self._calculation_ready:
             self._calculation_ready = True
             return ALL_RED, "Both nodes RED; calculating vehicle totals and weighted points"
+
+        timer_candidates = [
+            node for node in (NODE_A, NODE_B)
+            if getattr(self.transaction_manager, "timer_enabled", False)
+            and scores[node].get("vehicles") and scores[node].get("behindGreenVehicles", 0) > 0
+        ]
+        if timer_candidates:
+            last = self.transaction_manager.snapshot()["lastCompleted"]
+            next_node = NODE_B if last and last["sourceKey"] == NODE_A else NODE_A
+            command = next_node if next_node in timer_candidates else timer_candidates[0]
+            transaction = self.transaction_manager.begin_timer(command, scores[command]["vehicles"])
+            self._calculation_ready = False
+            if transaction is None:
+                return ALL_RED, "Unable to create timer batch"
+            return command, f"Timer batch for {transaction['sourceNode']}; 60-second admission, alternating queued nodes"
 
         command = priority_command(scores[NODE_A]["points"], scores[NODE_B]["points"], True)
         vehicles = scores[command].get("vehicles", [])
@@ -536,7 +613,7 @@ class PointComparisonController:
         preserve_missing: bool = True,
     ) -> str:
         result = node_results.get(node_key)
-        if result and result.get("success") and result.get("state") in (RED, GREEN):
+        if result and result.get("success") and result.get("state") in (RED, GREEN, YELLOW):
             return result["state"]
         if result:
             return UNKNOWN
@@ -544,8 +621,18 @@ class PointComparisonController:
 
     def snapshot(self) -> dict:
         with self._lock:
+            extra = {}
+            if not self.enabled and self.transaction_manager is not None:
+                state = self.transaction_manager.snapshot()
+                extra["transaction"] = state["active"]
+                extra["lastCompletedTransaction"] = state["lastCompleted"]
+                if state.get("blockedReason"):
+                    extra["reason"] = state["blockedReason"]
+                elif state["active"] and state["active"].get("anomaly"):
+                    extra["reason"] = state["active"]["anomaly"]
             return {
                 **self._snapshot,
+                **extra,
                 "nodeA": dict(self._snapshot["nodeA"]),
                 "nodeB": dict(self._snapshot["nodeB"]),
             }
@@ -555,6 +642,12 @@ class PointComparisonController:
             try:
                 self.evaluate_once()
             except Exception as error:
+                if hasattr(self.transaction_manager, "fault"):
+                    try:
+                        self.transaction_manager.fault(f"Controller error: {error}; operator review required")
+                    except Exception:
+                        # A storage failure must not prevent the physical red request.
+                        pass
                 try:
                     safety_result = self.signal_controller.apply(ALL_RED)
                 except Exception as safety_error:
@@ -594,6 +687,9 @@ class PointComparisonController:
                             ),
                         },
                         "lastError": last_error,
+                        "transaction": (
+                            self.transaction_manager.snapshot_active() if self.transaction_manager is not None else None
+                        ),
                     }
                 self._applied_command = ALL_RED if safety_result["success"] else None
             self._wake.wait(self.interval_seconds)

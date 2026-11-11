@@ -1,4 +1,4 @@
-export type TrafficSignal = "RED" | "GREEN" | "UNKNOWN";
+export type TrafficSignal = "RED" | "GREEN" | "YELLOW" | "UNKNOWN";
 export interface VehicleClassCounts {
   car?: number;
   motorcycle?: number;
@@ -39,7 +39,7 @@ export interface CameraStatus {
   incomingPoints?: number | null;
   totalVehicles?: number | null;
   expectedVehicles?: number | null;
-  vehicleCountState?: "CALCULATING" | "LOCKED BATCH" | "EXPECTING" | "OFFLINE";
+  vehicleCountState?: "CALCULATING" | "LOCKED BATCH" | "TIMER BATCH" | "EXPECTING" | "OFFLINE";
 }
 export interface TrafficNode {
   signal: TrafficSignal;
@@ -58,7 +58,7 @@ export interface TrafficNode {
   incomingPoints?: number | null;
   totalVehicles?: number | null;
   expectedVehicles?: number | null;
-  vehicleCountState?: "CALCULATING" | "LOCKED BATCH" | "EXPECTING" | "OFFLINE";
+  vehicleCountState?: "CALCULATING" | "LOCKED BATCH" | "TIMER BATCH" | "EXPECTING" | "OFFLINE";
 }
 export interface TrafficControlNode {
   points: number;
@@ -68,7 +68,7 @@ export interface TrafficControlNode {
 export interface TrafficControlStatus {
   enabled: boolean;
   mode: "TRANSACTION_BATCH" | "POINT_PRIORITY" | "DISABLED";
-  decision: "nodeA" | "nodeB" | "allRed" | null;
+  decision: "nodeA" | "nodeB" | "nodeAYellow" | "nodeBYellow" | "allRed" | null;
   commandedState: string;
   reason: string;
   nodeA: TrafficControlNode;
@@ -107,6 +107,15 @@ export interface ReleasedVehicleRecord {
   transactionId: string;
 }
 export interface TrafficTransaction {
+  decisionMode?: "WEIGHTED" | "TIMER";
+  enteredCount?: number;
+  exitedCount?: number;
+  timerDurationSeconds?: number;
+  timerRemainingSeconds?: number;
+  unusedGreenSeconds?: number;
+  greenEndedAt?: string;
+  endReason?: "timer_expired" | "incoming_inactivity" | "weighted_batch_released";
+  anomaly?: string;
   transactionId: string;
   sourceKey: "nodeA" | "nodeB";
   destinationKey: "nodeA" | "nodeB";
@@ -117,7 +126,16 @@ export interface TrafficTransaction {
   sourceRemaining: number;
   destinationRemaining: number;
   releasedVehicles: ReleasedVehicleRecord[];
-  status: "pending_green" | "active" | "source_complete" | "persist_pending" | "complete";
+  status:
+    | "pending_green"
+    | "active"
+    | "source_complete"
+    | "yellow_pending"
+    | "yellow"
+    | "clearance"
+    | "anomaly"
+    | "persist_pending"
+    | "complete";
   createdAt: string;
   greenStartedAt: string | null;
   sourceCompletedAt: string | null;
