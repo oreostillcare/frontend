@@ -19,9 +19,9 @@ def main():
     from ultralytics import YOLO
     from ultralytics.utils import ASSETS
     from config import settings
-    from detector import Detector, ModelPool
-    from openvino_artifacts import validate_export
-    from vehicle_identity import GlobalVehicleRegistry
+    from modules.live_monitoring.vehicle_detector import Detector, ModelPool
+    from modules.live_monitoring.openvino_model_artifacts import validate_export
+    from modules.live_monitoring.vehicle_identity import GlobalVehicleRegistry
 
     torch.set_num_threads(2)
     report = {"rawTensorChecks": [], "pipelineChecks": [], "accuracyValidated": False}

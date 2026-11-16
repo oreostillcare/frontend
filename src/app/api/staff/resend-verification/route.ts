@@ -25,6 +25,15 @@ function toMillis(value: unknown) {
   return value instanceof Timestamp ? value.toMillis() : 0;
 }
 
+function invitationDisplayName(invitation: FirebaseFirestore.DocumentData) {
+  return (
+    [invitation.firstName, invitation.middleInitial || invitation.middleName, invitation.lastName]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .join(" ") || String(invitation.username || "")
+  );
+}
+
 function newestFirst(left: FirebaseFirestore.QueryDocumentSnapshot, right: FirebaseFirestore.QueryDocumentSnapshot) {
   const leftData = left.data();
   const rightData = right.data();
@@ -64,7 +73,7 @@ async function preparePendingAuthUser(
     const createdUser = await adminAuth.createUser({
       email,
       password: temporaryPassword,
-      displayName: String(invitation.username || ""),
+      displayName: invitationDisplayName(invitation),
       emailVerified: false,
       disabled: false,
     });
@@ -73,7 +82,7 @@ async function preparePendingAuthUser(
 
   const updatedUser = await adminAuth.updateUser(authUser.uid, {
     password: temporaryPassword,
-    displayName: String(invitation.username || ""),
+    displayName: invitationDisplayName(invitation),
     emailVerified: false,
     disabled: false,
   });
@@ -181,6 +190,13 @@ export async function POST(request: Request) {
       transaction.set(nextInvitationRef, {
         email,
         normalizedEmail: email,
+        firstName: data.firstName || "",
+        middleInitial: String(data.middleInitial || data.middleName || "")
+          .trim()
+          .replace(/\.$/, "")
+          .slice(0, 1)
+          .toUpperCase(),
+        lastName: data.lastName || "",
         username: data.username,
         role: data.role,
         authUid: preparedUser.authUser.uid,

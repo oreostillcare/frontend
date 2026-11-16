@@ -1,4 +1,4 @@
-import { TrafficAnalytics } from "./_components/traffic-analytics";
+import { TrafficAnalytics } from "@/modules/traffic-analytics/analytics-dashboard";
 
 export default function Page() {
   return <TrafficAnalytics />;

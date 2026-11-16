@@ -47,7 +47,7 @@ def connections(host):
 
 
 def worker_class():
-    from camera import CameraWorker
+    from modules.live_monitoring.camera_capture import CameraWorker
 
     class ObservedWorker(CameraWorker):
         def __init__(self, *args, **kwargs):
@@ -173,8 +173,8 @@ def main():
     os.dup2(os.open(os.devnull, os.O_WRONLY), 2)
     import psutil
     from config import settings
-    from detector import ModelPool
-    from vehicle_identity import GlobalVehicleRegistry
+    from modules.live_monitoring.vehicle_detector import ModelPool
+    from modules.live_monitoring.vehicle_identity import GlobalVehicleRegistry
     from scripts.benchmark_video import Resources, baseline, package_version
 
     source = settings.camera_1_url

@@ -1,0 +1,103 @@
+<mxfile host="app.diagrams.net" modified="2026-10-14T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
+  <diagram id="firebase-staff-architecture" name="Firebase Staff Architecture">
+    <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="SmartRoad Firebase Staff &amp; Account Architecture" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=24;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="720" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="Firebase Authentication manages credentials; Cloud Firestore stores application profiles, roles, status, and workflow records." style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=13;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="960" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="administrator" value="Administrator" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="280" width="150" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="app-container" value="SmartRoad Next.js Application" style="swimlane;html=1;rounded=1;startSize=38;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="240" y="120" width="360" height="500" as="geometry" />
+        </mxCell>
+        <mxCell id="staff-dialog" value="Staff Dialog&#xa;Role • Username • Email" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;" vertex="1" parent="app-container">
+          <mxGeometry x="60" y="70" width="240" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="staff-api" value="Server API&#xa;/api/staff/*&#xa;&#xa;Validates access and coordinates Firebase writes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=13;" vertex="1" parent="app-container">
+          <mxGeometry x="60" y="190" width="240" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="snapshot" value="Real-time listener&#xa;onSnapshot()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;" vertex="1" parent="app-container">
+          <mxGeometry x="60" y="350" width="240" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="auth-container" value="Firebase Authentication" style="swimlane;html=1;rounded=1;startSize=38;fillColor=#e1f5fe;strokeColor=#0288d1;fontStyle=1;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="660" y="120" width="360" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="auth-user" value="User Account&#xa;&#xa;UID&#xa;Email&#xa;Password credential&#xa;Email verification&#xa;Disabled / enabled state" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="auth-container">
+          <mxGeometry x="65" y="65" width="230" height="125" as="geometry" />
+        </mxCell>
+
+        <mxCell id="firestore-container" value="Cloud Firestore Database — trafficlight / (default)" style="swimlane;html=1;rounded=1;startSize=38;fillColor=#fff8e1;strokeColor=#f9a825;fontStyle=1;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="660" y="390" width="840" height="400" as="geometry" />
+        </mxCell>
+        <mxCell id="staff" value="staff&#xa;&#xa;Permanent profiles&#xa;role • username • email&#xa;accountStatus • UID" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=13;" vertex="1" parent="firestore-container">
+          <mxGeometry x="40" y="75" width="170" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="pending" value="pendingStaffInvitations&#xa;&#xa;Unverified invitations&#xa;token • role • expiry" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=13;" vertex="1" parent="firestore-container">
+          <mxGeometry x="245" y="75" width="180" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="mail" value="mail&#xa;&#xa;Outgoing email jobs&#xa;to • subject • HTML" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;fontSize=13;" vertex="1" parent="firestore-container">
+          <mxGeometry x="460" y="75" width="150" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="email-changes" value="staffEmailChanges&#xa;&#xa;Pending email updates" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=13;" vertex="1" parent="firestore-container">
+          <mxGeometry x="645" y="75" width="155" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="reset" value="passwordResetSessions&#xa;&#xa;Password-reset workflow" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=13;" vertex="1" parent="firestore-container">
+          <mxGeometry x="40" y="235" width="185" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="traffic" value="trafficEvents&#xa;&#xa;Traffic detection history" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=13;" vertex="1" parent="firestore-container">
+          <mxGeometry x="270" y="235" width="160" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="system" value="systemEvents&#xa;&#xa;System activity records" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=13;" vertex="1" parent="firestore-container">
+          <mxGeometry x="475" y="235" width="160" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="link-note" value="The Firebase Auth UID links a login account to its Firestore staff profile." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;fontStyle=2;" vertex="1" parent="firestore-container">
+          <mxGeometry x="665" y="235" width="135" height="105" as="geometry" />
+        </mxCell>
+
+        <mxCell id="edge-admin-dialog" value="Add / edit staff" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontSize=11;" edge="1" parent="1" source="administrator" target="staff-dialog">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-dialog-api" value="Submit details" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontSize=11;" edge="1" parent="1" source="staff-dialog" target="staff-api">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-api-auth" value="Create or update login account" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#0288d1;fontSize=11;" edge="1" parent="1" source="staff-api" target="auth-user">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-api-pending" value="Create invitation" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d6b656;fontSize=11;" edge="1" parent="1" source="staff-api" target="pending">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-pending-mail" value="Queue verification email" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#b85450;fontSize=11;" edge="1" parent="1" source="pending" target="mail">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-auth-staff" value="After verification: create permanent profile using UID" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#82b366;fontSize=11;" edge="1" parent="1" source="auth-user" target="staff">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-staff-snapshot" value="Live profile updates" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#9673a6;fontSize=11;" edge="1" parent="1" source="staff" target="snapshot">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-pending-snapshot" value="Live invitation updates" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#9673a6;fontSize=11;" edge="1" parent="1" source="pending" target="snapshot">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-snapshot-admin" value="Refresh staff table" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#9673a6;fontSize=11;" edge="1" parent="1" source="snapshot" target="administrator">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-api-changes" value="Email-change workflow" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#9673a6;fontSize=11;" edge="1" parent="1" source="staff-api" target="email-changes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-api-reset" value="Password-reset workflow" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#9673a6;fontSize=11;" edge="1" parent="1" source="staff-api" target="reset">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

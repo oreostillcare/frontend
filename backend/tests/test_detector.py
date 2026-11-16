@@ -6,8 +6,8 @@ from unittest.mock import Mock, call
 
 import pytest
 
-import detector as detector_module
-from detector import (
+from modules.live_monitoring import vehicle_detector as detector_module
+from modules.live_monitoring.vehicle_detector import (
     CLASS_LOCK_OBSERVATIONS,
     COCO_TRACK_ID_OFFSET,
     COCO_VEHICLES,
@@ -21,7 +21,7 @@ from detector import (
     draw_vehicle_trail,
     vehicle_label_lines,
 )
-from performance import StageProfiler
+from modules.live_monitoring.inference_performance import StageProfiler
 
 
 def bare_detector():

@@ -205,6 +205,7 @@ async function archiveVerifiedStaff(staffId: string, administratorUid: string) {
   if (targetUid === administratorUid) {
     throw new ApiError("You cannot archive your own administrator account.", 409, "cannot-archive-self");
   }
+  await assertNotLastAdministrator(staff);
 
   await adminAuth.updateUser(targetUid, { disabled: true });
   try {
@@ -222,6 +223,22 @@ async function archiveVerifiedStaff(staffId: string, administratorUid: string) {
   }
 
   return "Staff account archived. Dashboard access is disabled.";
+}
+
+export async function assertNotLastAdministrator(staff: FirebaseFirestore.DocumentData | undefined) {
+  if (staff?.role !== "Administrator" || staff.accountStatus === "archived" || staff.status === "archived") {
+    return;
+  }
+
+  const snapshot = await adminDb.collection("staff").get();
+  const activeAdministratorCount = snapshot.docs.filter((document) => {
+    const data = document.data();
+    return data.role === "Administrator" && data.accountStatus !== "archived" && data.status !== "archived";
+  }).length;
+
+  if (activeAdministratorCount <= 1) {
+    throw new ApiError("At least one administrator account must remain active.", 409, "last-administrator");
+  }
 }
 
 async function restoreVerifiedStaff(staffId: string) {

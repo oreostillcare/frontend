@@ -338,8 +338,8 @@ def run():
     os.dup2(os.open(os.devnull, os.O_WRONLY), 2)
     import psutil
     from config import settings
-    from detector import ModelPool
-    from vehicle_identity import GlobalVehicleRegistry
+    from modules.live_monitoring.vehicle_detector import ModelPool
+    from modules.live_monitoring.vehicle_identity import GlobalVehicleRegistry
     from scripts.benchmark_rtsp import connections, camera_details
     from scripts.benchmark_video import baseline
 

@@ -1,4 +1,4 @@
-import { MonitoringGrid } from "./_components/monitoring-grid";
+import { MonitoringGrid } from "@/modules/live-monitoring/live-monitoring-grid";
 export default function Page() {
   return <MonitoringGrid />;
 }

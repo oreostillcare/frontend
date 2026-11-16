@@ -4,7 +4,8 @@ import type { UserRecord } from "firebase-admin/auth";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 
 import { adminAuth, adminDb } from "./admin";
-import { ApiError, createOpaqueToken } from "./admin-staff";
+import { ApiError, createOpaqueToken, formatStaffDisplayName } from "./admin-staff";
+import { recordStaffActivityFields } from "./staff-activity";
 
 export interface EmailChangeResult {
   status: "pending" | "processing" | "completed";
@@ -114,6 +115,16 @@ export async function reconcileEmailChange(requestId: string, expectedStaffId?: 
       updatedAt: FieldValue.serverTimestamp(),
     });
     await batch.commit();
+    const targetName = formatStaffDisplayName(staff);
+    await recordStaffActivityFields({
+      actorEmail: String(staff.email || newEmail),
+      actorName: targetName,
+      actorRole: staff.role === "Administrator" ? "Administrator" : "Operator",
+      actorUid: targetUid,
+      activity: "Verified email",
+      name: targetName,
+      targetEmail: newEmail,
+    }).catch(() => undefined);
 
     return { status: "completed", newEmail };
   } catch (error) {

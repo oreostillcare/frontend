@@ -22,7 +22,7 @@ import cv2
 import psutil
 
 from config import settings
-from vehicle_identity import GlobalVehicleRegistry
+from modules.live_monitoring.vehicle_identity import GlobalVehicleRegistry
 
 
 def load_pipeline(revision: str | None):
@@ -40,8 +40,8 @@ def load_pipeline(revision: str | None):
             module.__file__ = str(ROOT / f"{name}.py")
             sys.modules[name] = module
             exec(compile(source, module.__file__, "exec"), module.__dict__)
-    from camera import CameraWorker
-    from detector import ModelPool
+    from modules.live_monitoring.camera_capture import CameraWorker
+    from modules.live_monitoring.vehicle_detector import ModelPool
 
     return CameraWorker, ModelPool, revision or "working-tree"
 

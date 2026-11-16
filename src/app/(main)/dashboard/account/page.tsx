@@ -1,4 +1,4 @@
-import { AccountPanel } from "./_components/account-panel";
+import { AccountPanel } from "@/modules/account/account-settings-panel";
 export default function Page() {
   return (
     <div className="flex flex-col gap-4">

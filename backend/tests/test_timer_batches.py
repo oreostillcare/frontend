@@ -2,10 +2,17 @@
 
 import pytest
 
-import timer_batches
-from timer_batches import TimerBatchManager
-from traffic_control import ALL_RED, NODE_A, NODE_B, YELLOW_COMMANDS, Esp32SignalController, PointComparisonController
-from tracking import TrackState, TrafficRegion
+from modules.timer_batching import timer_batch_manager as timer_batches
+from modules.timer_batching.timer_batch_manager import TimerBatchManager
+from modules.traffic_decision.traffic_control import (
+    ALL_RED,
+    NODE_A,
+    NODE_B,
+    YELLOW_COMMANDS,
+    Esp32SignalController,
+    PointComparisonController,
+)
+from modules.live_monitoring.vehicle_tracking import TrackState, TrafficRegion
 
 
 def queued(gid="waiting", track=1):

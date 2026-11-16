@@ -1,6 +1,6 @@
 import time
 
-from traffic_control import (
+from modules.traffic_decision.traffic_control import (
     ALL_RED,
     NODE_A,
     NODE_B,
@@ -8,7 +8,7 @@ from traffic_control import (
     PointComparisonController,
     priority_command,
 )
-from traffic_transactions import TrafficTransactionManager
+from modules.firebase_persistence.traffic_transaction_firestore import TrafficTransactionManager
 
 
 class FakeSignalController:

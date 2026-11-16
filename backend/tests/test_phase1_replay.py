@@ -10,15 +10,15 @@ import threading
 import cv2
 import numpy as np
 
-import camera as camera_module
-from camera import CameraWorker
-from detector import Detector, ModelSession
+from modules.live_monitoring import camera_capture as camera_module
+from modules.live_monitoring.camera_capture import CameraWorker
+from modules.live_monitoring.vehicle_detector import Detector, ModelSession
 from test_camera import FakeDetector
 from test_detector import FakeVector
 from test_traffic_control import FakeSignalController, FakeTransactionWriter
-from traffic_control import PointComparisonController
-from traffic_transactions import TrafficTransactionManager
-from vehicle_identity import GlobalVehicleRegistry
+from modules.traffic_decision.traffic_control import PointComparisonController
+from modules.firebase_persistence.traffic_transaction_firestore import TrafficTransactionManager
+from modules.live_monitoring.vehicle_identity import GlobalVehicleRegistry
 
 
 def test_recorded_replay_preserves_ids_annotations_counts_signals_and_completed_cycle(monkeypatch, tmp_path):
@@ -42,10 +42,13 @@ def test_recorded_replay_preserves_ids_annotations_counts_signals_and_completed_
         clock = [100.0]
         scheduler_clock = [0.0]
         monkeypatch.setattr(camera_module.time, "perf_counter", lambda: scheduler_clock[0])
-        monkeypatch.setattr("traffic_transactions.time.monotonic", lambda: clock[0])
-        monkeypatch.setattr("traffic_transactions.utc_timestamp", lambda: f"t-{clock[0]:.1f}")
-        monkeypatch.setattr("scoring.utc_timestamp", lambda: f"t-{clock[0]:.1f}")
-        monkeypatch.setattr("traffic_transactions.uuid.uuid4", lambda: SimpleNamespace(hex="fixed-test-id"))
+        monkeypatch.setattr("modules.firebase_persistence.traffic_transaction_firestore.time.monotonic", lambda: clock[0])
+        monkeypatch.setattr("modules.firebase_persistence.traffic_transaction_firestore.utc_timestamp", lambda: f"t-{clock[0]:.1f}")
+        monkeypatch.setattr("modules.traffic_decision.scoring.utc_timestamp", lambda: f"t-{clock[0]:.1f}")
+        monkeypatch.setattr(
+            "modules.firebase_persistence.traffic_transaction_firestore.uuid.uuid4",
+            lambda: SimpleNamespace(hex="fixed-test-id"),
+        )
         config = SimpleNamespace(
             confidence=0.5, image_size=640, detection_fps=10, line_counting=True,
             reconnect_seconds=0.01, viewer_aware_jpeg=viewer_aware, performance_profiling=profiling,

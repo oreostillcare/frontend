@@ -1,4 +1,6 @@
 import atexit
+
+# Flask entrypoint: wires cameras, detection, traffic decisions, APIs, and shutdown cleanup.
 import os
 import secrets
 import threading
@@ -8,14 +10,14 @@ from urllib.request import Request, urlopen
 from flask import Flask, Response, jsonify, redirect, render_template, request, url_for
 from flask_cors import CORS
 
-from camera import CameraWorker
+from modules.live_monitoring.camera_capture import CameraWorker
 from config import settings
-from detector import ModelPool
-from traffic_control import Esp32SignalController, PointComparisonController
-from traffic_transactions import FirestoreTransactionWriter
-from timer_batches import TimerBatchManager
-from vehicle_identity import GlobalVehicleRegistry
-from usb_devices import enumerate_usb_devices, usb_catalog
+from modules.live_monitoring.vehicle_detector import ModelPool
+from modules.traffic_decision.traffic_control import Esp32SignalController, PointComparisonController
+from modules.firebase_persistence.traffic_transaction_firestore import FirestoreTransactionWriter
+from modules.timer_batching.timer_batch_manager import TimerBatchManager
+from modules.live_monitoring.vehicle_identity import GlobalVehicleRegistry
+from modules.live_monitoring.usb_camera_devices import enumerate_usb_devices, usb_catalog
 
 display_mirror = getattr(settings, "node_b_display_mirror", False)
 observation_only = display_mirror or getattr(settings, "observation_only", True)

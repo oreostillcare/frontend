@@ -145,6 +145,16 @@ describe("staff lifecycle", () => {
     });
   });
 
+  it("prevents archiving the last active administrator", async () => {
+    firestore.seed("staff", "staff-1", activeStaff({ role: "Administrator", uid: "other-admin-uid" }));
+
+    await expect(archiveStaffMember("staff-1", "administrator-uid")).rejects.toMatchObject({
+      code: "last-administrator",
+      status: 409,
+    });
+    expect(firebaseAdmin.adminAuth.updateUser).not.toHaveBeenCalled();
+  });
+
   it("re-enables Firebase Auth when archiving the Firestore record fails", async () => {
     firestore.seed("staff", "staff-1", activeStaff());
     firestore.ref("staff", "staff-1").update = vi.fn().mockRejectedValueOnce(new Error("Firestore unavailable"));

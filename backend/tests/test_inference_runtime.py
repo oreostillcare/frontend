@@ -3,7 +3,7 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from inference_runtime import predictor_factory
+from modules.live_monitoring.inference_runtime import predictor_factory
 
 
 def fake_predictor_api(monkeypatch):

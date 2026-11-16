@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from config import settings  # noqa: E402
-from detector import Detector  # noqa: E402
+from modules.live_monitoring.vehicle_detector import Detector  # noqa: E402
 
 
 def main():

@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { cookies } from "next/headers";
 
 import { AppSidebar } from "@/app/(main)/dashboard/_components/sidebar/app-sidebar";
-import { ProtectedDashboard } from "@/components/protected-dashboard";
+import { ProtectedDashboard } from "@/modules/logout-route-protection/dashboard-route-guard";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
@@ -13,7 +13,7 @@ import { AccountSwitcher } from "./_components/header/account-switcher";
 import { LayoutControls } from "./_components/header/layout-controls";
 import { SearchDialog } from "./_components/header/search-dialog";
 import { ThemeSwitcher } from "./_components/header/theme-switcher";
-import { NodeAlarmProvider } from "./_components/node-alarm-provider";
+import { NodeAlarmProvider } from "@/modules/notifications/compromised-node-alert-provider";
 
 export default async function Layout({ children }: Readonly<{ children: ReactNode }>) {
   const cookieStore = await cookies();

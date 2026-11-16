@@ -20,7 +20,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("YOLO_CONFIG_DIR", str(ROOT / "runs/phase3"))
     from config import settings
-    from openvino_artifacts import digest
+    from modules.live_monitoring.openvino_model_artifacts import digest
     import openvino as ov
     from ultralytics import YOLO
 

@@ -23,10 +23,10 @@ def test_observation_settings_disable_hardware_without_changing_detection():
 
 
 def test_hardware_and_upload_boundaries_are_blocked_even_if_called(monkeypatch):
-    import camera
-    import detector
-    import traffic_control
-    import traffic_transactions
+    from modules.live_monitoring import camera_capture as camera
+    from modules.live_monitoring import vehicle_detector as detector
+    from modules.traffic_decision import traffic_control
+    from modules.firebase_persistence import traffic_transaction_firestore as traffic_transactions
 
     for module, name in (
         (camera, "CameraWorker"), (detector, "ModelPool"),
@@ -63,10 +63,10 @@ def test_probe_releases_camera_and_does_not_write_frames(monkeypatch):
 
 
 def test_numeric_frame_recorder_is_bounded_and_attached_to_camera_worker(monkeypatch):
-    import camera
-    import detector
-    import traffic_control
-    import traffic_transactions
+    from modules.live_monitoring import camera_capture as camera
+    from modules.live_monitoring import vehicle_detector as detector
+    from modules.traffic_decision import traffic_control
+    from modules.firebase_persistence import traffic_transaction_firestore as traffic_transactions
 
     for module, name in (
         (camera, "CameraWorker"), (detector, "ModelPool"),

@@ -39,7 +39,7 @@ def main():
     os.environ.update(YOLO_OFFLINE="true", YOLO_CONFIG_DIR=str(output.parent / "ultralytics"))
     import cv2
     from config import settings
-    from detector import (Detector, ModelPool, LOCAL_VEHICLES, COCO_VEHICLES,
+    from modules.live_monitoring.vehicle_detector import (Detector, ModelPool, LOCAL_VEHICLES, COCO_VEHICLES,
                           COCO_TRACK_ID_OFFSET, box_iou)
     from scripts.benchmark_video import stats
 

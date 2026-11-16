@@ -1,6 +1,6 @@
 import pytest
 
-from scoring import IncomingVehicleLedger, VEHICLE_CLASS_POINTS
+from modules.traffic_decision.scoring import IncomingVehicleLedger, VEHICLE_CLASS_POINTS
 
 
 @pytest.mark.parametrize(

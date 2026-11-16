@@ -2,8 +2,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 import sys
 
-import performance
-from performance import ProcessSampler, StageProfiler
+from modules.live_monitoring import inference_performance as performance
+from modules.live_monitoring.inference_performance import ProcessSampler, StageProfiler
 
 
 def test_disabled_profiling_does_not_read_a_clock(monkeypatch):
