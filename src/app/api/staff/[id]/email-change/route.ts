@@ -9,14 +9,16 @@ import {
   expiresInHours,
   findStaffByEmail,
   findStaffDocument,
+  formatStaffDisplayName,
   getStaffAuthUid,
   hashToken,
   normalizeEmail,
   requireAdministrator,
 } from "@/lib/firebase/admin-staff";
 import { reconcileEmailChange } from "@/lib/firebase/email-change-status";
+import { recordStaffActivity } from "@/lib/firebase/staff-activity";
 
-const emailSchema = z.object({ email: z.email() });
+const emailSchema = z.object({ email: z.email(), activityAlreadyLogged: z.boolean().default(false) });
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -26,7 +28,6 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     if (!staffDocument?.exists) throw new ApiError("Staff record not found.", 404, "staff-not-found");
     const staff = staffDocument.data();
     if (!staff) throw new ApiError("Staff record not found.", 404, "staff-not-found");
-
     if (staff.emailChangeStatus === "completed") {
       const completedAt =
         staff.emailChangeCompletedAt instanceof Timestamp
@@ -55,6 +56,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!staffDocument?.exists) throw new ApiError("Staff record not found.", 404, "staff-not-found");
     const staff = staffDocument.data();
     if (!staff) throw new ApiError("Staff record not found.", 404, "staff-not-found");
+    const targetName = formatStaffDisplayName(staff);
     const currentEmail = normalizeEmail(String(staff.email || ""));
     if (newEmail === currentEmail) throw new ApiError("Enter a different email address.", 400, "email-unchanged");
     if (staff.accountStatus === "archived" || staff.status === "archived") {
@@ -112,6 +114,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       updatedAt: FieldValue.serverTimestamp(),
     });
     await batch.commit();
+    if (!input.activityAlreadyLogged) {
+      await recordStaffActivity({
+        actor: administrator,
+        activity: `Changed ${targetName}'s email to ${newEmail}`,
+        name: targetName,
+        targetEmail: newEmail,
+      }).catch(() => undefined);
+    }
 
     return Response.json({
       message: `Email verification prepared for ${newEmail}.`,

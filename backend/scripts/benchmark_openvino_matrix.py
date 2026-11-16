@@ -128,8 +128,8 @@ def read_source(path, capture_state):
 
 
 def setup(mode, config):
-    from detector import Detector, ModelPool
-    from vehicle_identity import GlobalVehicleRegistry
+    from modules.live_monitoring.vehicle_detector import Detector, ModelPool
+    from modules.live_monitoring.vehicle_identity import GlobalVehicleRegistry
 
     dual_camera = mode == "dual-camera"
     need_local = mode in {"local", "dual", "dual-camera"}

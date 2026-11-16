@@ -6,6 +6,7 @@ start fresh. No ground-truth counting accuracy is inferred from model output.
 """
 
 import argparse
+import ast
 from dataclasses import replace
 import hashlib
 import json
@@ -22,26 +23,74 @@ import cv2
 import psutil
 
 from config import settings
-from vehicle_identity import GlobalVehicleRegistry
+from modules.live_monitoring.vehicle_identity import GlobalVehicleRegistry
 
 
 def load_pipeline(revision: str | None):
     if revision:
+        git = ["git", "-c", f"safe.directory={ROOT.parent.as_posix()}"]
         revision = subprocess.check_output(
-            ["git", "rev-parse", "--verify", f"{revision}^{{commit}}"], cwd=ROOT, text=True
+            git + ["rev-parse", "--verify", f"{revision}^{{commit}}"], cwd=ROOT.parent, text=True
         ).strip()
         # Only the camera/detector pipeline is loaded from the chosen revision.
         # Domain rules/config/weights use this checkout; app.py is never loaded.
-        for name in ("detector", "camera"):
-            source = subprocess.check_output(
-                ["git", "show", f"{revision}:backend/{name}.py"], cwd=ROOT, text=True, encoding="utf-8"
-            )
-            module = types.ModuleType(name)
-            module.__file__ = str(ROOT / f"{name}.py")
-            sys.modules[name] = module
-            exec(compile(source, module.__file__, "exec"), module.__dict__)
-    from camera import CameraWorker
-    from detector import ModelPool
+        paths = set(subprocess.check_output(
+            git + ["ls-tree", "-r", "--name-only", revision, "backend"], cwd=ROOT.parent, text=True
+        ).splitlines())
+        relocated = {
+            "detector": "modules.live_monitoring.vehicle_detector",
+            "camera": "modules.live_monitoring.camera_capture",
+        }
+        imports = {
+            "performance": "modules.live_monitoring.inference_performance",
+            "scoring": "modules.traffic_decision.scoring",
+            "tracking": "modules.live_monitoring.vehicle_tracking",
+            "vehicle_identity": "modules.live_monitoring.vehicle_identity",
+            "usb_devices": "modules.live_monitoring.usb_camera_devices",
+            "inference_runtime": "modules.live_monitoring.inference_runtime",
+            "openvino_artifacts": "modules.live_monitoring.openvino_model_artifacts",
+        }
+        for name, moved in relocated.items():
+            imports[name] = imports[moved] = f"_smartroad_replay_{name}"
+
+        class PipelineImports(ast.NodeTransformer):
+            def visit_ImportFrom(self, node):
+                if node.level == 0:
+                    node.module = imports.get(node.module, node.module)
+                return node
+
+            def visit_Import(self, node):
+                for alias in node.names:
+                    if alias.name in imports:
+                        alias.asname = alias.asname or alias.name.split(".")[0]
+                        alias.name = imports[alias.name]
+                return node
+
+        loaded = {}
+        previous = {name: sys.modules.get(name) for name in (imports["detector"], imports["camera"])}
+        try:
+            for name, moved in relocated.items():
+                path = f"backend/{name}.py"
+                if path not in paths:
+                    path = "backend/" + moved.replace(".", "/") + ".py"
+                source = subprocess.check_output(
+                    git + ["show", f"{revision}:{path}"], cwd=ROOT.parent, text=True, encoding="utf-8"
+                )
+                module = types.ModuleType(imports[name])
+                module.__file__ = str(ROOT.parent / path)
+                sys.modules[module.__name__] = module
+                tree = PipelineImports().visit(ast.parse(source, filename=module.__file__))
+                exec(compile(tree, module.__file__, "exec"), module.__dict__)
+                loaded[name] = module
+            return loaded["camera"].CameraWorker, loaded["detector"].ModelPool, revision
+        finally:
+            for name, module in previous.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+    from modules.live_monitoring.camera_capture import CameraWorker
+    from modules.live_monitoring.vehicle_detector import ModelPool
 
     return CameraWorker, ModelPool, revision or "working-tree"
 

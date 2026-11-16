@@ -49,7 +49,7 @@ def probe(args):
     import openvino as ov
     import psutil
     from config import settings
-    from openvino_artifacts import validate_export
+    from modules.live_monitoring.openvino_model_artifacts import validate_export
     from ultralytics.data.augment import LetterBox
 
     path = Path(getattr(settings, f"{args.model}_openvino_model"))

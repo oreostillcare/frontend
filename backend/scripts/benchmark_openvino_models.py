@@ -53,7 +53,7 @@ def clone_experiment_exports(settings, output_root, image_size):
         if output_root == source or source in output_root.parents:
             raise ValueError(f"Experiment workspace cannot be inside a production export: {output_root}")
 
-    from openvino_artifacts import digest, validate_export
+    from modules.live_monitoring.openvino_model_artifacts import digest, validate_export
 
     # Validate original manifests against their own declared export size before
     # making any experimental copies. This preserves validate_export semantics.

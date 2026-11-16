@@ -1,6 +1,6 @@
 import { collection, onSnapshot, type Timestamp } from "firebase/firestore";
 
-import type { StaffMember, StaffRole } from "@/app/(main)/dashboard/staff/_components/staff-types";
+import type { StaffMember, StaffRole } from "@/modules/staff-management/staff-types";
 
 import { db } from "./client";
 
@@ -37,6 +37,9 @@ function mapStaffMember(id: string, data: Record<string, unknown>): StaffMember 
     authUid: getString(data.authUid) || undefined,
     role,
     username: getString(data.username),
+    firstName: getString(data.firstName) || undefined,
+    middleInitial: getString(data.middleInitial) || getString(data.middleName) || undefined,
+    lastName: getString(data.lastName) || undefined,
     email: getString(data.email).toLowerCase(),
     dateJoined: getDateJoined(data.dateJoined, data.createdAt),
     emailVerified: data.emailVerified !== false && legacyStatus !== "pending",
@@ -96,6 +99,9 @@ export function subscribeToStaffMembers(onData: (staff: StaffMember[]) => void, 
             id: `invitation:${document.id}`,
             role: data.role === "Administrator" ? "Administrator" : "Operator",
             username: getString(data.username),
+            firstName: getString(data.firstName) || undefined,
+            middleInitial: getString(data.middleInitial) || getString(data.middleName) || undefined,
+            lastName: getString(data.lastName) || undefined,
             email: getString(data.email).toLowerCase(),
             dateJoined: timestampToIso(data.createdAt)?.slice(0, 10) || "Pending",
             emailVerified: false,

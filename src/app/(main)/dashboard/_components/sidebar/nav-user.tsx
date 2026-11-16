@@ -15,8 +15,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
-import { useFirebaseAccount } from "@/hooks/use-firebase-account";
 import { getInitials } from "@/lib/utils";
+import { useFirebaseAccount } from "@/modules/logout-route-protection/firebase-account-hook";
 
 export function NavUser() {
   const { isMobile } = useSidebar();

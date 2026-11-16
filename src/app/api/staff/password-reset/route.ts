@@ -7,8 +7,10 @@ import {
   authenticateStaff,
   errorResponse,
   findStaffDocument,
+  formatStaffDisplayName,
   getStaffAuthUid,
 } from "@/lib/firebase/admin-staff";
+import { recordStaffActivity } from "@/lib/firebase/staff-activity";
 
 const RESET_COOLDOWN_MS = 180_000;
 const resetSchema = z.object({ staffId: z.string().trim().min(1) });
@@ -39,13 +41,13 @@ async function loadResetTarget(request: Request, staffId: string) {
 
   const authUid = await getStaffAuthUid(staffDocument);
   const authUser = await adminAuth.getUser(authUid);
-  return { staffDocument, staff, authUser };
+  return { requester, staffDocument, staff, authUser };
 }
 
 export async function POST(request: Request) {
   try {
     const input = resetSchema.parse(await request.json());
-    const { staffDocument, authUser } = await loadResetTarget(request, input.staffId);
+    const { requester, staffDocument, staff, authUser } = await loadResetTarget(request, input.staffId);
     const baselineValidAfterTime = Date.parse(authUser.tokensValidAfterTime || "") || 0;
 
     const result = await adminDb.runTransaction(async (transaction) => {
@@ -78,6 +80,13 @@ export async function POST(request: Request) {
       );
     }
 
+    const targetName = formatStaffDisplayName(staff);
+    await recordStaffActivity({
+      actor: requester,
+      activity: `Requested password reset for ${targetName}`,
+      name: targetName,
+    }).catch(() => undefined);
+
     return Response.json({
       message: "Password reset request authorized.",
       cooldownEndsAt: new Date(result.cooldownEndsAt).toISOString(),
@@ -94,7 +103,7 @@ export async function GET(request: Request) {
   try {
     const staffId = new URL(request.url).searchParams.get("staffId")?.trim();
     if (!staffId) throw new ApiError("A staff account is required.", 400, "missing-staff");
-    const { staffDocument, staff, authUser } = await loadResetTarget(request, staffId);
+    const { requester, staffDocument, staff, authUser } = await loadResetTarget(request, staffId);
     const requestedAt = toMillis(staff.passwordResetRequestedAt);
     const completedAt = toMillis(staff.passwordResetCompletedAt);
 
@@ -120,6 +129,12 @@ export async function GET(request: Request) {
       passwordResetBaselineValidAfterTime: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
+    const targetName = formatStaffDisplayName(staff);
+    await recordStaffActivity({
+      actor: requester,
+      activity: `Changed ${targetName}'s password`,
+      name: targetName,
+    }).catch(() => undefined);
     return Response.json({ status: "completed", completedAt: new Date().toISOString() });
   } catch (error) {
     return errorResponse(error);

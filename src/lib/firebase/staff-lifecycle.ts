@@ -1,7 +1,13 @@
 import "server-only";
 
 import type { UserRecord } from "firebase-admin/auth";
-import { type DocumentData, FieldValue, type QueryDocumentSnapshot, Timestamp } from "firebase-admin/firestore";
+import {
+  type DocumentData,
+  FieldValue,
+  type QueryDocumentSnapshot,
+  Timestamp,
+  type Transaction,
+} from "firebase-admin/firestore";
 
 import { adminAuth, adminDb } from "./admin";
 import {
@@ -205,50 +211,144 @@ async function archiveVerifiedStaff(staffId: string, administratorUid: string) {
   if (targetUid === administratorUid) {
     throw new ApiError("You cannot archive your own administrator account.", 409, "cannot-archive-self");
   }
-
-  await adminAuth.updateUser(targetUid, { disabled: true });
-  try {
-    await staffDocument.ref.update({
+  const operationId = createOpaqueToken();
+  const previous = await adminDb.runTransaction(async (transaction) => {
+    const current = await transaction.get(staffDocument.ref);
+    const data = current.data();
+    if (!current.exists || !data) throw new ApiError("Staff record not found.", 404, "staff-not-found");
+    assertNoStaffOperation(data);
+    if (data.accountStatus === "archived" || data.status === "archived") return null;
+    await assertNotLastAdministrator(transaction, data);
+    // Reserve the removal before disabling Auth so concurrent removals count it as unavailable.
+    transaction.update(staffDocument.ref, {
       uid: targetUid,
       authUid: targetUid,
       accountStatus: "archived",
       archivedAt: Timestamp.now(),
       archivedBy: administratorUid,
+      lifecycleOperationId: operationId,
       updatedAt: FieldValue.serverTimestamp(),
     });
+    return data;
+  });
+  if (!previous) return "Staff account is already archived.";
+
+  try {
+    await adminAuth.updateUser(targetUid, { disabled: true });
+    await staffDocument.ref.update({ lifecycleOperationId: FieldValue.delete() });
   } catch (error) {
-    await adminAuth.updateUser(targetUid, { disabled: false }).catch(() => undefined);
+    // Do not count the account as active again unless Auth recovery succeeded.
+    try {
+      await adminAuth.updateUser(targetUid, { disabled: false });
+      await adminDb.runTransaction(async (transaction) => {
+        const current = await transaction.get(staffDocument.ref);
+        if (current.data()?.lifecycleOperationId !== operationId) return;
+        transaction.update(staffDocument.ref, {
+          accountStatus: previous.accountStatus ?? FieldValue.delete(),
+          archivedAt: previous.archivedAt ?? FieldValue.delete(),
+          archivedBy: previous.archivedBy ?? FieldValue.delete(),
+          lifecycleOperationId: FieldValue.delete(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      });
+    } catch {
+      // Keep the archived reservation if recovery fails; never advertise a disabled administrator as active.
+    }
     throw error;
   }
 
   return "Staff account archived. Dashboard access is disabled.";
 }
 
+function assertNoStaffOperation(staff: DocumentData) {
+  if (staff.lifecycleOperationId || staff.cleanupOperationId) {
+    throw new ApiError(
+      "This staff account has an operation in progress. Try again later.",
+      409,
+      "staff-operation-in-progress",
+    );
+  }
+}
+
+async function assertNotLastAdministrator(transaction: Transaction, staff: DocumentData) {
+  if (staff.role !== "Administrator" || staff.accountStatus === "archived" || staff.status === "archived") {
+    return;
+  }
+
+  const snapshot = await transaction.get(adminDb.collection("staff"));
+  const activeAdministratorCount = snapshot.docs.filter((document) => {
+    const data = document.data();
+    return data.role === "Administrator" && data.accountStatus !== "archived" && data.status !== "archived";
+  }).length;
+
+  if (activeAdministratorCount <= 1) {
+    throw new ApiError("At least one administrator account must remain active.", 409, "last-administrator");
+  }
+}
+
+export async function updateStaffProfile(staffId: string, update: DocumentData) {
+  const reference = adminDb.collection("staff").doc(staffId);
+  return adminDb.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(reference);
+    const current = snapshot.data();
+    if (!snapshot.exists || !current) throw new ApiError("Staff record not found.", 404, "staff-not-found");
+    assertNoStaffOperation(current);
+    if (update.role === "Operator") await assertNotLastAdministrator(transaction, current);
+    transaction.update(reference, update);
+    return current;
+  });
+}
+
 async function restoreVerifiedStaff(staffId: string) {
   const staffDocument = await findStaffDocument(staffId);
   if (!staffDocument?.exists) throw new ApiError("Staff record not found.", 404, "staff-not-found");
-  const staff = staffDocument.data();
-  if (staff?.cleanupOperationId) {
-    throw new ApiError("This staff account is being permanently deleted.", 409, "cleanup-in-progress");
-  }
-  if (staff?.accountStatus !== "archived" && staff?.status !== "archived") {
-    return "Staff account is already active.";
-  }
-
   const targetUid = await getStaffAuthUid(staffDocument);
-  await adminAuth.updateUser(targetUid, { disabled: false });
+  const operationId = createOpaqueToken();
+  const reserved = await adminDb.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(staffDocument.ref);
+    const staff = snapshot.data();
+    if (!snapshot.exists || !staff) throw new ApiError("Staff record not found.", 404, "staff-not-found");
+    if (staff.cleanupOperationId) {
+      throw new ApiError("This staff account is being permanently deleted.", 409, "cleanup-in-progress");
+    }
+    assertNoStaffOperation(staff);
+    if (staff.accountStatus !== "archived" && staff.status !== "archived") return false;
+    transaction.update(staffDocument.ref, { lifecycleOperationId: operationId });
+    return true;
+  });
+  if (!reserved) return "Staff account is already active.";
+
   try {
-    await staffDocument.ref.update({
-      uid: targetUid,
-      authUid: targetUid,
-      accountStatus: "active",
-      archivedAt: FieldValue.delete(),
-      archivedBy: FieldValue.delete(),
-      reactivatedAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
+    await adminAuth.updateUser(targetUid, { disabled: false });
+    await adminDb.runTransaction(async (transaction) => {
+      const current = await transaction.get(staffDocument.ref);
+      if (current.data()?.lifecycleOperationId !== operationId) {
+        throw new ApiError("The staff operation changed. Try again later.", 409, "staff-operation-in-progress");
+      }
+      transaction.update(staffDocument.ref, {
+        uid: targetUid,
+        authUid: targetUid,
+        accountStatus: "active",
+        status: FieldValue.delete(),
+        archivedAt: FieldValue.delete(),
+        archivedBy: FieldValue.delete(),
+        lifecycleOperationId: FieldValue.delete(),
+        reactivatedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
     });
   } catch (error) {
-    await adminAuth.updateUser(targetUid, { disabled: true }).catch(() => undefined);
+    try {
+      await adminAuth.updateUser(targetUid, { disabled: true });
+      await adminDb.runTransaction(async (transaction) => {
+        const current = await transaction.get(staffDocument.ref);
+        if (current.data()?.lifecycleOperationId === operationId) {
+          transaction.update(staffDocument.ref, { lifecycleOperationId: FieldValue.delete() });
+        }
+      });
+    } catch {
+      // Leave the account archived and reserved when recovery is uncertain.
+    }
     throw error;
   }
 
@@ -429,6 +529,7 @@ async function claimCleanupCandidate(
     if (
       !current.exists ||
       !data ||
+      data.lifecycleOperationId ||
       !(data.archivedAt instanceof Timestamp) ||
       data.archivedAt.toMillis() > cutoff.toMillis()
     ) {

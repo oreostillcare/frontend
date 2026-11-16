@@ -150,7 +150,16 @@ describe("staff invitation creation", () => {
   });
 
   it("creates the Auth user and invitation before sending verification", async () => {
-    const response = await POST(post({ email: "NEW@EXAMPLE.COM", role: "Operator", username: " New User " }));
+    const response = await POST(
+      post({
+        email: "NEW@EXAMPLE.COM",
+        firstName: "New",
+        middleInitial: "M",
+        lastName: "User",
+        role: "Operator",
+        username: " New User ",
+      }),
+    );
     const payload = (await response.json()) as { email: string; expiresAt: string; success: boolean };
     const invitations = firestore.documents("pendingStaffInvitations");
 
@@ -163,7 +172,7 @@ describe("staff invitation creation", () => {
     });
     expect(firebaseAdmin.adminAuth.createUser).toHaveBeenCalledWith({
       disabled: false,
-      displayName: "New User",
+      displayName: "New M User",
       email: "new@example.com",
       emailVerified: false,
       password: expect.any(String),
@@ -171,6 +180,9 @@ describe("staff invitation creation", () => {
     expect(invitations).toHaveLength(1);
     expect(invitations[0]?.data()).toMatchObject({
       authUid: "new-auth-uid",
+      firstName: "New",
+      middleInitial: "M",
+      lastName: "User",
       normalizedEmail: "new@example.com",
       role: "Operator",
       status: "pending",

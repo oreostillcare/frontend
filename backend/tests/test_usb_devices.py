@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-import usb_devices
+from modules.live_monitoring import usb_camera_devices as usb_devices
 
 
 def test_catalog_keeps_identically_named_physical_devices_separate():

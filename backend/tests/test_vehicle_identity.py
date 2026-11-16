@@ -1,5 +1,5 @@
-import vehicle_identity as identity_module
-from vehicle_identity import GlobalVehicleRegistry
+from modules.live_monitoring import vehicle_identity as identity_module
+from modules.live_monitoring.vehicle_identity import GlobalVehicleRegistry
 
 
 def detection(

@@ -71,6 +71,12 @@ test.describe("authentication and protected routes", () => {
 
   test("completes a login with mocked Firebase Authentication and navigates to the dashboard", async ({ page }) => {
     let signInRequestSeen = false;
+    let activityRequestSeen = false;
+    await page.route("**/api/staff/activity", async (route) => {
+      expect(route.request().postDataJSON()).toEqual({ event: "login" });
+      activityRequestSeen = true;
+      await json(route, { success: true });
+    });
     await page.route("**/api/auth/resolve-identifier", (route) => json(route, { email: staffEmail }));
     await page.route(
       /^https:\/\/identitytoolkit\.googleapis\.com\/v1\/accounts:(?:signInWithPassword|lookup)(?:\?.*)?$/,
@@ -123,6 +129,7 @@ test.describe("authentication and protected routes", () => {
     await dashboardNavigation;
 
     expect(signInRequestSeen).toBe(true);
+    expect(activityRequestSeen).toBe(true);
   });
 
   test("redirects unauthenticated dashboard access to login with the requested path", async ({ page }) => {

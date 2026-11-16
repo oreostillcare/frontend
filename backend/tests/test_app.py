@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import camera as camera_module
+from modules.live_monitoring import camera_capture as camera_module
 import config as config_module
-import detector as detector_module
-import usb_devices
+from modules.live_monitoring import vehicle_detector as detector_module
+from modules.live_monitoring import usb_camera_devices as usb_devices
 
 
 class FakeModelPool:
@@ -270,7 +270,7 @@ def test_api_cors_allows_configured_frontend(client):
 
 @pytest.mark.parametrize("app_module", [True], indirect=True)
 def test_display_mirror_never_activates_node_b_or_signal_io(app_module, client, monkeypatch):
-    import traffic_control
+    from modules.traffic_decision import traffic_control
     from unittest.mock import Mock
 
     network = Mock(side_effect=AssertionError("Physical signal I/O reached"))
@@ -328,8 +328,8 @@ def test_source_switch_rejects_duplicate_instead_of_silently_swapping(app_module
 
 def test_dual_usb_observation_guard_blocks_all_signal_and_upload_paths(app_module, client, monkeypatch):
     from unittest.mock import Mock
-    import traffic_control
-    import traffic_transactions
+    from modules.traffic_decision import traffic_control
+    from modules.firebase_persistence import traffic_transaction_firestore as traffic_transactions
 
     network = Mock(side_effect=AssertionError("External write attempted"))
     monkeypatch.setattr(traffic_control, "urlopen", network)

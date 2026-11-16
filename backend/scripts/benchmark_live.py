@@ -57,10 +57,10 @@ def probe_cameras(indices):
 
 
 def install_isolation(diagnostics=False):
-    import camera
-    import detector
-    import traffic_control
-    import traffic_transactions
+    from modules.live_monitoring import camera_capture as camera
+    from modules.live_monitoring import vehicle_detector as detector
+    from modules.traffic_decision import traffic_control
+    from modules.firebase_persistence import traffic_transaction_firestore as traffic_transactions
 
     class ObservationSignals(traffic_control.Esp32SignalController):
         def _call(self, *args, **kwargs):

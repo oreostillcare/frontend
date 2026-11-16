@@ -150,7 +150,7 @@ try {
     Push-Location $backendDir
     try {
       Write-Host "Validating the configured inference model artifacts..."
-      & $venvPython -c "import sys; from config import settings; from detector import ModelPool; pool = ModelPool(settings); print('Inference backend:', pool.backend); print('Models:', pool.status()); sys.exit(0 if pool.online else 1)"
+      & $venvPython -c "import sys; from config import settings; from modules.live_monitoring.vehicle_detector import ModelPool; pool = ModelPool(settings); print('Inference backend:', pool.backend); print('Models:', pool.status()); sys.exit(0 if pool.online else 1)"
       if ($LASTEXITCODE -ne 0) {
         throw "Model validation failed. Supply both OpenVINO export directories under backend/models/openvino, or configure valid model paths in the root .env."
       }

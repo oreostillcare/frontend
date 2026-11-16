@@ -27,8 +27,7 @@ def export_fixture(root, name):
 
 
 def test_clone_changes_only_experiment_metadata_and_preserves_production(monkeypatch, tmp_path):
-    import openvino_artifacts
-
+    from modules.live_monitoring import openvino_model_artifacts as openvino_artifacts
     sources = {name: export_fixture(tmp_path, name) for name in benchmark.MODELS}
     before = {path: path.read_bytes() for source, _ in sources.values() for path in source.iterdir()}
     monkeypatch.setattr(openvino_artifacts.importlib.util, "find_spec", lambda _name: object())

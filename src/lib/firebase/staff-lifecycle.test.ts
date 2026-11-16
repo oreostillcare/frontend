@@ -27,6 +27,7 @@ import {
   cleanupExpiredPendingInvitations,
   deletePendingInvitationAuthUser,
   restoreStaffMember,
+  updateStaffProfile,
 } from "./staff-lifecycle";
 
 const INVITATION_HASH = "a".repeat(64);
@@ -132,8 +133,13 @@ describe("staff lifecycle", () => {
     expect(firebaseAdmin.adminAuth.updateUser).not.toHaveBeenCalled();
   });
 
-  it("archives a verified staff record only after disabling Firebase Auth", async () => {
+  it("reserves a verified staff archive before disabling Firebase Auth", async () => {
     firestore.seed("staff", "staff-1", activeStaff());
+    firebaseAdmin.adminAuth.updateUser.mockImplementationOnce(async () => {
+      expect(firestore.get("staff", "staff-1")).toMatchObject({ accountStatus: "archived" });
+      expect(firestore.get("staff", "staff-1")?.lifecycleOperationId).toBeTruthy();
+      return { uid: "staff-uid" };
+    });
 
     await expect(archiveStaffMember("staff-1", "administrator-uid")).resolves.toEqual({
       message: "Staff account archived. Dashboard access is disabled.",
@@ -143,6 +149,17 @@ describe("staff lifecycle", () => {
       accountStatus: "archived",
       archivedBy: "administrator-uid",
     });
+    expect(firestore.get("staff", "staff-1")).not.toHaveProperty("lifecycleOperationId");
+  });
+
+  it("prevents archiving the last active administrator", async () => {
+    firestore.seed("staff", "staff-1", activeStaff({ role: "Administrator", uid: "other-admin-uid" }));
+
+    await expect(archiveStaffMember("staff-1", "administrator-uid")).rejects.toMatchObject({
+      code: "last-administrator",
+      status: 409,
+    });
+    expect(firebaseAdmin.adminAuth.updateUser).not.toHaveBeenCalled();
   });
 
   it("re-enables Firebase Auth when archiving the Firestore record fails", async () => {
@@ -152,6 +169,87 @@ describe("staff lifecycle", () => {
     await expect(archiveStaffMember("staff-1", "administrator-uid")).rejects.toThrow("Firestore unavailable");
     expect(firebaseAdmin.adminAuth.updateUser).toHaveBeenNthCalledWith(1, "staff-uid", { disabled: true });
     expect(firebaseAdmin.adminAuth.updateUser).toHaveBeenNthCalledWith(2, "staff-uid", { disabled: false });
+    expect(firestore.get("staff", "staff-1")).toMatchObject({ accountStatus: "active" });
+    expect(firestore.get("staff", "staff-1")).not.toHaveProperty("lifecycleOperationId");
+  });
+
+  it("rejects one of two concurrent administrator demotions", async () => {
+    firestore.seed("staff", "admin-a", activeStaff({ role: "Administrator", uid: "admin-a" }));
+    firestore.seed("staff", "admin-b", activeStaff({ role: "Administrator", uid: "admin-b" }));
+
+    const results = await Promise.allSettled([
+      updateStaffProfile("admin-a", { role: "Operator" }),
+      updateStaffProfile("admin-b", { role: "Operator" }),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: { code: "last-administrator", status: 409 },
+    });
+    expect(firestore.documents("staff").filter((document) => document.data()?.role === "Administrator")).toHaveLength(
+      1,
+    );
+  });
+
+  it("protects the remaining administrator during a concurrent archive and demotion", async () => {
+    firestore.seed("staff", "admin-a", activeStaff({ role: "Administrator", uid: "admin-a" }));
+    firestore.seed("staff", "admin-b", activeStaff({ role: "Administrator", uid: "admin-b" }));
+
+    const results = await Promise.allSettled([
+      archiveStaffMember("admin-a", "acting-admin"),
+      updateStaffProfile("admin-b", { role: "Operator" }),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: { code: "last-administrator" },
+    });
+    const remaining = firestore.documents("staff").filter((document) => {
+      const data = document.data();
+      return data?.role === "Administrator" && data.accountStatus !== "archived";
+    });
+    expect(remaining).toHaveLength(1);
+  });
+
+  it("rejects one of two concurrent administrator archives before a second Auth disable", async () => {
+    firestore.seed("staff", "admin-a", activeStaff({ role: "Administrator", uid: "admin-a" }));
+    firestore.seed("staff", "admin-b", activeStaff({ role: "Administrator", uid: "admin-b" }));
+
+    const results = await Promise.allSettled([
+      archiveStaffMember("admin-a", "acting-admin"),
+      archiveStaffMember("admin-b", "acting-admin"),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: { code: "last-administrator" },
+    });
+    expect(firebaseAdmin.adminAuth.updateUser).toHaveBeenCalledTimes(1);
+    expect(firebaseAdmin.adminAuth.updateUser).toHaveBeenCalledWith(expect.any(String), { disabled: true });
+  });
+
+  it("keeps failed Auth recovery reserved and excludes it from the administrator count", async () => {
+    firestore.seed("staff", "admin-a", activeStaff({ role: "Administrator", uid: "admin-a" }));
+    firestore.seed("staff", "admin-b", activeStaff({ role: "Administrator", uid: "admin-b" }));
+    firebaseAdmin.adminAuth.updateUser.mockRejectedValueOnce(new Error("disable failed"));
+    firebaseAdmin.adminAuth.updateUser.mockRejectedValueOnce(new Error("recovery failed"));
+
+    await expect(archiveStaffMember("admin-a", "acting-admin")).rejects.toThrow("disable failed");
+    expect(firestore.get("staff", "admin-a")).toMatchObject({ accountStatus: "archived" });
+    await expect(updateStaffProfile("admin-b", { role: "Operator" })).rejects.toMatchObject({
+      code: "last-administrator",
+    });
+    await expect(updateStaffProfile("admin-a", { role: "Operator" })).rejects.toMatchObject({
+      code: "staff-operation-in-progress",
+    });
+    await expect(restoreStaffMember("admin-a")).rejects.toMatchObject({ code: "staff-operation-in-progress" });
+  });
+
+  it("restores the prior profile status when Auth disabling fails and recovery succeeds", async () => {
+    firestore.seed("staff", "staff-1", activeStaff());
+    firebaseAdmin.adminAuth.updateUser.mockRejectedValueOnce(new Error("Auth unavailable"));
+
+    await expect(archiveStaffMember("staff-1", "administrator-uid")).rejects.toThrow("Auth unavailable");
+    expect(firestore.get("staff", "staff-1")).toMatchObject({ accountStatus: "active" });
+    expect(firestore.get("staff", "staff-1")).not.toHaveProperty("archivedBy");
+    expect(firestore.get("staff", "staff-1")).not.toHaveProperty("lifecycleOperationId");
   });
 
   it("restores an archived verified staff record", async () => {
@@ -163,6 +261,85 @@ describe("staff lifecycle", () => {
     expect(firebaseAdmin.adminAuth.updateUser).toHaveBeenCalledWith("staff-uid", { disabled: false });
     expect(firestore.get("staff", "staff-1")).toMatchObject({ accountStatus: "active" });
     expect(firestore.get("staff", "staff-1")).not.toHaveProperty("archivedBy");
+  });
+
+  it("keeps a restoring administrator unavailable until Auth is enabled and blocks stale lifecycle writes", async () => {
+    firestore.seed(
+      "staff",
+      "admin-a",
+      activeStaff({ role: "Administrator", uid: "admin-a", accountStatus: "archived" }),
+    );
+    firestore.seed("staff", "admin-b", activeStaff({ role: "Administrator", uid: "admin-b" }));
+    let resolveEnable: (value: { uid: string }) => void = () => undefined;
+    let signalStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    firebaseAdmin.adminAuth.updateUser.mockImplementationOnce(() => {
+      signalStarted();
+      return new Promise<{ uid: string }>((resolve) => {
+        resolveEnable = resolve;
+      });
+    });
+
+    const restoration = restoreStaffMember("admin-a");
+    await started;
+    expect(firestore.get("staff", "admin-a")?.accountStatus).toBe("archived");
+    await expect(restoreStaffMember("admin-a")).rejects.toMatchObject({ code: "staff-operation-in-progress" });
+    await expect(updateStaffProfile("admin-a", { role: "Operator" })).rejects.toMatchObject({
+      code: "staff-operation-in-progress",
+    });
+    await expect(updateStaffProfile("admin-b", { role: "Operator" })).rejects.toMatchObject({
+      code: "last-administrator",
+    });
+    resolveEnable({ uid: "admin-a" });
+    await restoration;
+    expect(firestore.get("staff", "admin-a")?.accountStatus).toBe("active");
+    expect(firestore.get("staff", "admin-a")).not.toHaveProperty("lifecycleOperationId");
+  });
+
+  it("leaves a failed restore archived and releases its reservation after Auth rollback", async () => {
+    firestore.seed("staff", "staff-1", activeStaff({ accountStatus: "archived" }));
+    firebaseAdmin.adminAuth.updateUser.mockRejectedValueOnce(new Error("Auth unavailable"));
+    await expect(restoreStaffMember("staff-1")).rejects.toThrow("Auth unavailable");
+    expect(firebaseAdmin.adminAuth.updateUser).toHaveBeenLastCalledWith("staff-uid", { disabled: true });
+    expect(firestore.get("staff", "staff-1")?.accountStatus).toBe("archived");
+    expect(firestore.get("staff", "staff-1")).not.toHaveProperty("lifecycleOperationId");
+  });
+
+  it("does not delete an old unverified account while its Auth restoration is pending", async () => {
+    firestore.seed(
+      "staff",
+      "staff-1",
+      activeStaff({
+        accountStatus: "archived",
+        archivedAt: Timestamp.fromDate(new Date("2026-08-20T10:00:00.000Z")),
+        emailVerified: false,
+      }),
+    );
+    let resolveEnable: (value: { uid: string }) => void = () => undefined;
+    let signalStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    firebaseAdmin.adminAuth.updateUser.mockImplementationOnce(() => {
+      signalStarted();
+      return new Promise<{ uid: string }>((resolve) => {
+        resolveEnable = resolve;
+      });
+    });
+
+    const restoration = restoreStaffMember("staff-1");
+    await started;
+    await expect(cleanupArchivedUnverifiedAccounts()).resolves.toEqual({ deleted: 0, failed: [] });
+    expect(firebaseAdmin.adminAuth.deleteUser).not.toHaveBeenCalled();
+    expect(firestore.ref("staff", "staff-1").delete).not.toHaveBeenCalled();
+    expect(firestore.get("staff", "staff-1")?.accountStatus).toBe("archived");
+
+    resolveEnable({ uid: "staff-uid" });
+    await expect(restoration).resolves.toEqual({ message: "Staff account restored. Dashboard access is enabled." });
+    expect(firestore.get("staff", "staff-1")?.accountStatus).toBe("active");
+    expect(firestore.get("staff", "staff-1")).not.toHaveProperty("lifecycleOperationId");
   });
 
   it("does not delete an invitation Auth user once a staff record owns the email", async () => {

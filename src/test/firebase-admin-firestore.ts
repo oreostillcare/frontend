@@ -159,7 +159,7 @@ export function createFakeAdminFirestore() {
       delete: vi.fn((ref: FakeDocumentReference) => {
         operations.push({ kind: "delete", reference: ref });
       }),
-      get: vi.fn((ref: FakeDocumentReference) => ref.get()),
+      get: vi.fn(<T>(ref: { get: () => Promise<T> }) => ref.get()),
       set: vi.fn((ref: FakeDocumentReference, data: StoredDocument, options?: { merge?: boolean }) => {
         operations.push({ kind: "set", reference: ref, data, merge: options?.merge });
       }),
@@ -169,11 +169,20 @@ export function createFakeAdminFirestore() {
     };
   };
 
-  const runTransaction = vi.fn(async (callback: (transaction: ReturnType<typeof createTransaction>) => unknown) => {
-    const transaction = createTransaction();
-    const result = await callback(transaction);
-    for (const operation of transaction.operations) await applyOperation(operation);
-    return result;
+  let transactionQueue = Promise.resolve();
+  const runTransaction = vi.fn((callback: (transaction: ReturnType<typeof createTransaction>) => unknown) => {
+    // Model Firestore's serializable transactions; callbacks never observe another uncommitted write.
+    const pending = transactionQueue.then(async () => {
+      const transaction = createTransaction();
+      const result = await callback(transaction);
+      for (const operation of transaction.operations) await applyOperation(operation);
+      return result;
+    });
+    transactionQueue = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pending;
   });
 
   function createBatch() {

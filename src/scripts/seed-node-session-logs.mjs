@@ -19,7 +19,7 @@ if (missingConfig.length > 0) {
 }
 
 const app =
-  getApps()[0] ||
+  getApps()[0] ??
   initializeApp({
     projectId,
     credential: cert({ projectId, clientEmail, privateKey }),

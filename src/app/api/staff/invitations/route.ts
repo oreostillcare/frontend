@@ -19,6 +19,9 @@ import { cancelPendingInvitation } from "@/lib/firebase/staff-lifecycle";
 const invitationSchema = z.object({
   email: z.email(),
   username: z.string().trim().min(2).max(60),
+  firstName: z.string().trim().max(60).default(""),
+  middleInitial: z.string().trim().max(1).default(""),
+  lastName: z.string().trim().max(60).default(""),
   role: z.enum(["Administrator", "Operator"]),
 });
 
@@ -82,7 +85,7 @@ export async function POST(request: Request) {
     const authUser = await adminAuth.createUser({
       email,
       password: temporaryPassword,
-      displayName: input.username,
+      displayName: [input.firstName, input.middleInitial, input.lastName].filter(Boolean).join(" ") || input.username,
       emailVerified: false,
       disabled: false,
     });
@@ -92,6 +95,9 @@ export async function POST(request: Request) {
       authUid: authUser.uid,
       email,
       normalizedEmail: email,
+      firstName: input.firstName,
+      middleInitial: input.middleInitial.toUpperCase(),
+      lastName: input.lastName,
       username: input.username,
       role: input.role,
       tokenHash,
@@ -123,7 +129,7 @@ export async function POST(request: Request) {
     ]);
     if (error instanceof z.ZodError) {
       return Response.json(
-        { error: "Enter a valid email, username, and role.", code: "invalid-input" },
+        { error: "Enter valid name, email, username, and role details.", code: "invalid-input" },
         { status: 400 },
       );
     }

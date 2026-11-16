@@ -114,4 +114,3 @@ class LatestFrameMailbox:
     def closed(self):
         with self._condition:
             return self._closed
-

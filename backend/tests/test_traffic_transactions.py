@@ -1,4 +1,4 @@
-from traffic_transactions import TrafficTransactionManager
+from modules.firebase_persistence.traffic_transaction_firestore import TrafficTransactionManager
 
 
 def vehicle(gid, track_id, vehicle_class="car", points=4):
@@ -168,7 +168,7 @@ def test_preexisting_incoming_vehicle_cannot_become_a_new_destination_outgoing()
 
 def test_new_outgoing_requires_one_second_after_source_release(monkeypatch):
     clock = [100.0]
-    monkeypatch.setattr("traffic_transactions.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("modules.firebase_persistence.traffic_transaction_firestore.time.monotonic", lambda: clock[0])
     manager = TrafficTransactionManager(
         outgoing_confirmation_frames=1,
         outgoing_confirmation_seconds=1.0,

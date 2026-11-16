@@ -6,8 +6,8 @@ import time
 import numpy as np
 import pytest
 
-import camera as camera_module
-from camera import CameraWorker
+from modules.live_monitoring import camera_capture as camera_module
+from modules.live_monitoring.camera_capture import CameraWorker
 
 
 class FakeDetector:

@@ -11,7 +11,7 @@ import time
 import cv2
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from usb_devices import enumerate_usb_devices
+from modules.live_monitoring.usb_camera_devices import enumerate_usb_devices
 
 
 def measure(index, seconds, start, result):

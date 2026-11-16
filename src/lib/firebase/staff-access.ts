@@ -10,6 +10,9 @@ export interface StaffProfile {
   username: string;
   email: string;
   role: StaffRole;
+  firstName?: string;
+  middleInitial?: string;
+  lastName?: string;
   dateJoined?: string;
   accountStatus: "active" | "archived";
   passwordResetStatus?: "idle" | "pending" | "completed" | "failed";
@@ -52,6 +55,9 @@ function mapProfile(id: string, data: Record<string, unknown>, user: User): Staf
     username: getString(data.username) || user.displayName?.trim() || email.split("@")[0],
     email,
     role,
+    firstName: getString(data.firstName) || undefined,
+    middleInitial: getString(data.middleInitial) || getString(data.middleName) || undefined,
+    lastName: getString(data.lastName) || undefined,
     dateJoined: getString(data.dateJoined) || timestampToIso(data.createdAt)?.slice(0, 10),
     accountStatus,
     passwordResetStatus:

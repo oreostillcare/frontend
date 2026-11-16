@@ -88,7 +88,11 @@ export async function POST(request: Request) {
 
     await adminAuth.updateUser(authUser.uid, {
       password: input.password,
-      displayName: String(invitation.username),
+      displayName:
+        [invitation.firstName, invitation.middleInitial || invitation.middleName, invitation.lastName]
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+          .join(" ") || String(invitation.username),
       disabled: false,
     });
 
@@ -97,6 +101,13 @@ export async function POST(request: Request) {
       uid: authUser.uid,
       authUid: authUser.uid,
       role: invitation.role,
+      firstName: String(invitation.firstName || ""),
+      middleInitial: String(invitation.middleInitial || invitation.middleName || "")
+        .trim()
+        .replace(/\.$/, "")
+        .slice(0, 1)
+        .toUpperCase(),
+      lastName: String(invitation.lastName || ""),
       username: invitation.username,
       email: invitationEmail,
       normalizedEmail: invitationEmail,

@@ -22,7 +22,11 @@ def test_numeric_observer_records_consumed_version_without_replacing_camera_loop
             self._performance = {}
             self.detector = SimpleNamespace(process=lambda frame: (frame, []))
 
-    monkeypatch.setitem(sys.modules, "camera", SimpleNamespace(CameraWorker=Base))
+    monkeypatch.setitem(
+        sys.modules,
+        "modules.live_monitoring.camera_capture",
+        SimpleNamespace(CameraWorker=Base),
+    )
     worker = worker_class()()
     worker._raw_version = 5
     assert worker._raw_version == 5 and worker.consumed_version == 0

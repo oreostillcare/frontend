@@ -6,8 +6,8 @@ from unittest.mock import Mock, call
 
 import pytest
 
-import detector as detector_module
-from detector import (
+from modules.live_monitoring import vehicle_detector as detector_module
+from modules.live_monitoring.vehicle_detector import (
     CLASS_LOCK_OBSERVATIONS,
     COCO_TRACK_ID_OFFSET,
     COCO_VEHICLES,
@@ -21,7 +21,7 @@ from detector import (
     draw_vehicle_trail,
     vehicle_label_lines,
 )
-from performance import StageProfiler
+from modules.live_monitoring.inference_performance import StageProfiler
 
 
 def bare_detector():
@@ -137,7 +137,7 @@ def test_openvino_pool_selects_export_directories_without_source_checkpoints(mon
     coco_names = {1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
     yolo = Mock(side_effect=[fake_yolo(local_names), fake_yolo(coco_names)])
     monkeypatch.setitem(sys.modules, "ultralytics", SimpleNamespace(YOLO=yolo))
-    monkeypatch.setattr("openvino_artifacts.validate_export", Mock(side_effect=[local_names, coco_names]))
+    monkeypatch.setattr("modules.live_monitoring.openvino_model_artifacts.validate_export", Mock(side_effect=[local_names, coco_names]))
     config = SimpleNamespace(
         inference_backend="openvino",
         local_yolo_model=local_path,
@@ -172,7 +172,7 @@ def test_openvino_cpu_budget_is_set_before_ultralytics_load_and_keeps_cpu_device
 
     monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(set_num_threads=lambda count: calls.append(("threads", count))))
     monkeypatch.setitem(sys.modules, "ultralytics", SimpleNamespace(YOLO=load_yolo))
-    monkeypatch.setattr("openvino_artifacts.validate_export", Mock(return_value=local_names))
+    monkeypatch.setattr("modules.live_monitoring.openvino_model_artifacts.validate_export", Mock(return_value=local_names))
     class Predictor:
         pass
     monkeypatch.setitem(sys.modules, "ultralytics.models.yolo.detect", SimpleNamespace(DetectionPredictor=Predictor))

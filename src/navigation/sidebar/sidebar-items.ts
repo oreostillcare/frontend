@@ -57,7 +57,13 @@ export const sidebarItems: NavGroup[] = [
     items: [
       { id: "dashboard", title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
       { id: "monitoring", title: "Live Monitoring", url: "/dashboard/monitoring", icon: Video },
-      { id: "analytics", title: "Analytics", url: "/dashboard/analytics", icon: ChartNoAxesCombined },
+      {
+        id: "analytics",
+        title: "Analytics",
+        url: "/dashboard/analytics",
+        icon: ChartNoAxesCombined,
+        roles: ["Administrator"],
+      },
       { id: "logs", title: "System Logs", url: "/dashboard/logs", icon: ScrollText },
       {
         id: "staff",

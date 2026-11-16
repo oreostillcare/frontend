@@ -13,6 +13,7 @@ export interface AuthenticatedStaff {
   documentId: string;
   role: StaffRole;
   email: string;
+  name: string;
 }
 
 export class ApiError extends Error {
@@ -35,6 +36,18 @@ export function hashToken(token: string) {
 
 export function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+export function formatStaffDisplayName(data: Record<string, unknown>, fallback = "Unknown staff") {
+  const firstName = typeof data.firstName === "string" ? data.firstName.trim() : "";
+  const lastName = typeof data.lastName === "string" ? data.lastName.trim() : "";
+  const middleValue = typeof data.middleInitial === "string" ? data.middleInitial : data.middleName;
+  const middleInitial = typeof middleValue === "string" ? middleValue.trim().replace(/\.$/, "") : "";
+  const username = typeof data.username === "string" ? data.username.trim() : "";
+  const givenName = [firstName, middleInitial ? `${middleInitial.slice(0, 1).toUpperCase()}.` : ""]
+    .filter(Boolean)
+    .join(" ");
+  return lastName || givenName ? [lastName, givenName].filter(Boolean).join(", ") : username || fallback;
 }
 
 export function escapeHtml(value: string) {
@@ -96,6 +109,7 @@ export async function authenticateStaff(request: Request): Promise<Authenticated
     documentId: document.id,
     role,
     email: String(data.email || email || "").toLowerCase(),
+    name: formatStaffDisplayName(data),
   };
 }
 

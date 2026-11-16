@@ -1,5 +1,5 @@
-import { LoginForm } from "@/app/(main)/auth/_components/login-form";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { LoginForm } from "@/modules/authentication-session/login-form";
 export default function LoginPage() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-muted/30 p-4">

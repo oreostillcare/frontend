@@ -1,4 +1,4 @@
-from tracking import TrackState, TrafficRegion
+from modules.live_monitoring.vehicle_tracking import TrackState, TrafficRegion
 
 
 def detection(track_id, center, bounding_box=None):

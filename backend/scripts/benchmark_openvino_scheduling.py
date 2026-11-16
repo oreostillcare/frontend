@@ -39,8 +39,8 @@ def worker(args):
     import cv2
     import psutil
     from config import settings
-    from detector import Detector, ModelPool
-    from vehicle_identity import GlobalVehicleRegistry
+    from modules.live_monitoring.vehicle_detector import Detector, ModelPool
+    from modules.live_monitoring.vehicle_identity import GlobalVehicleRegistry
 
     # Configuration is replaced only after config import has completed .env loading.
     config = replace(

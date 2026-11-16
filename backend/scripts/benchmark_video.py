@@ -126,8 +126,8 @@ def baseline(seconds):
 
 
 def setup_pipeline(config, pipeline):
-    from detector import Detector, ModelPool
-    from vehicle_identity import GlobalVehicleRegistry
+    from modules.live_monitoring.vehicle_detector import Detector, ModelPool
+    from modules.live_monitoring.vehicle_identity import GlobalVehicleRegistry
 
     pool = ModelPool(config)
     if not pool.online:
@@ -196,7 +196,7 @@ def main():
     import cv2
     import psutil
     from config import settings
-    from openvino_artifacts import digest
+    from modules.live_monitoring.openvino_model_artifacts import digest
 
     config = replace(settings, inference_backend=args.backend, cpu_inference_threads=args.threads,
                      openvino_threads=args.ov_threads, openvino_streams=0, performance_profiling=True)

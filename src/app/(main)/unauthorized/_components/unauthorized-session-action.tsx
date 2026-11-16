@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import { useFirebaseAccount } from "@/hooks/use-firebase-account";
+import { useFirebaseAccount } from "@/modules/logout-route-protection/firebase-account-hook";
 
 export function UnauthorizedSessionAction() {
   const { logout, isLoggingOut } = useFirebaseAccount();

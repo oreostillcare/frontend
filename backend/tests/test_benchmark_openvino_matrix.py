@@ -36,8 +36,7 @@ def test_source_guard_accepts_existing_file_and_rejects_missing_or_url(tmp_path)
 
 
 def test_dual_camera_setup_creates_independent_detectors_with_shared_pool(monkeypatch):
-    import detector
-
+    from modules.live_monitoring import vehicle_detector as detector
     detector_calls = []
 
     class FakePool:

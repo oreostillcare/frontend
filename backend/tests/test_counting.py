@@ -1,6 +1,6 @@
 import pytest
 
-from counting import orientation, segments_intersect
+from modules.live_monitoring.vehicle_counting import orientation, segments_intersect
 
 
 @pytest.mark.parametrize(

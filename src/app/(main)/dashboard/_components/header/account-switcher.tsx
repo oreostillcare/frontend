@@ -14,8 +14,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useFirebaseAccount } from "@/hooks/use-firebase-account";
 import { getInitials } from "@/lib/utils";
+import { useFirebaseAccount } from "@/modules/logout-route-protection/firebase-account-hook";
 
 export function AccountSwitcher() {
   const { name, email, avatar, logout, isLoggingOut } = useFirebaseAccount();
