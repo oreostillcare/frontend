@@ -1,4 +1,4 @@
-"""Validate optional exports against their original checkpoints; never auto-export."""
+"""Validate standalone OpenVINO exports and any available source checkpoints."""
 
 import hashlib
 import importlib.util
@@ -18,11 +18,17 @@ def digest(path: Path) -> str:
 
 def validate_export(path: Path, checkpoint: Path, image_size: int) -> dict[int, str]:
     if importlib.util.find_spec("openvino") is None:
-        raise RuntimeError("Optional OpenVINO runtime missing; install requirements-openvino.txt explicitly")
+        raise RuntimeError("OpenVINO runtime missing; install requirements-openvino.txt explicitly")
     manifest = json.loads((path / "smartroad-export.json").read_text(encoding="utf-8"))
-    if len(list(path.glob("*.xml"))) != 1:
+    xml_models = list(path.glob("*.xml"))
+    if len(xml_models) != 1:
         raise ValueError("Expected exactly one OpenVINO XML model")
-    if manifest["checkpointSha256"] != digest(checkpoint):
+    required_artifacts = {xml_models[0].name, xml_models[0].with_suffix(".bin").name, "metadata.yaml"}
+    if not required_artifacts.issubset(manifest["artifacts"]):
+        raise ValueError("OpenVINO manifest must hash the XML, BIN and metadata files")
+    # IR exports are deployable without PyTorch weights. If a source checkpoint
+    # is provided, still reject a stale export rather than silently accepting it.
+    if checkpoint.exists() and manifest["checkpointSha256"] != digest(checkpoint):
         raise ValueError("OpenVINO artifact does not match the current PyTorch checkpoint")
     if manifest["precision"] != "FP32" or manifest["imageSize"] != image_size or not manifest["dynamic"]:
         raise ValueError("Expected a dynamic FP32 export at the unchanged inference image size")

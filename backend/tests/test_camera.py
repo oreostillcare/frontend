@@ -145,12 +145,17 @@ def test_raw_viewers_share_one_unannotated_encode_without_detection(monkeypatch,
     worker.online = True
     worker._raw_frame = np.zeros((8, 8, 3), dtype=np.uint8)
     worker._raw_version = 1
+    worker._raw_captured_at = time.perf_counter()
     worker.detector.process = Mock(side_effect=AssertionError("Raw view invoked inference"))
     encode = Mock(return_value=(True, np.array([1, 2, 3], dtype=np.uint8)))
     monkeypatch.setattr(camera_module.cv2, "imencode", encode)
     first, second = worker.raw_frames(), worker.raw_frames()
     try:
-        assert next(first).endswith(b"\x01\x02\x03\r\n")
+        part = next(first)
+        assert part.endswith(b"\x01\x02\x03\r\n")
+        assert b"Content-Length: 3\r\n" in part
+        assert b"X-Frame-Sequence: 1\r\n" in part
+        assert f"X-Captured-At: {worker._raw_captured_at:.6f}\r\n".encode() in part
         assert next(second).endswith(b"\x01\x02\x03\r\n")
         assert worker._raw_viewers == 2
         encode.assert_called_once()
@@ -164,6 +169,152 @@ def test_raw_viewers_share_one_unannotated_encode_without_detection(monkeypatch,
         worker.wait_until_stopped()
     assert worker._raw_viewers == 0
     assert worker._raw_jpeg_frame is None
+
+
+def test_raw_pacing_includes_encoding_and_reports_independent_video_metrics(monkeypatch, worker):
+    clock = [10.0]
+    waits = []
+    worker.config.raw_stream_fps = 20
+    worker.online = True
+    worker._raw_viewers = 1
+    worker._raw_frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    worker._raw_captured_at = 9.99
+    worker._raw_version = 42
+    worker.detector.process = Mock(side_effect=AssertionError("Raw path invoked inference"))
+    monkeypatch.setattr(camera_module.time, "perf_counter", lambda: clock[0])
+
+    def encode(*_args):
+        clock[0] += .02
+        return True, np.array([1, 2, 3], dtype=np.uint8)
+
+    def wait(seconds):
+        waits.append(seconds)
+        worker._stop.set()
+
+    monkeypatch.setattr(camera_module.cv2, "imencode", encode)
+    monkeypatch.setattr(worker._stop, "wait", wait)
+    worker._raw_stream_loop()
+
+    assert waits == pytest.approx([.03])
+    video = worker.telemetry()["video"]
+    assert video["rawEncodeMs"] == 20.0
+    assert video["rawFrameAgeMs"] == 30.0
+    assert video["rawFrameSequence"] == 42
+    assert worker.fps == 0  # AI FPS is never assigned by the raw stream.
+    worker.detector.process.assert_not_called()
+
+
+def test_raw_slow_consumer_skips_to_newest_shared_frame(monkeypatch, worker):
+    # Exercise generator backpressure without camera, encoder, or inference threads.
+    worker._raw_stream_thread = object()
+    stream = worker.raw_frames()
+    result = []
+    thread = threading.Thread(target=lambda: result.append(next(stream)))
+    thread.start()
+    deadline = time.monotonic() + 2
+    while worker._raw_viewers != 1 and time.monotonic() < deadline:
+        time.sleep(.001)
+    try:
+        with worker._raw_jpeg_condition:
+            worker._raw_jpeg_frame = b"one"
+            worker._raw_jpeg_version = 1
+            worker._raw_jpeg_capture_version = 10
+            worker._raw_jpeg_condition.notify_all()
+        thread.join(2)
+        assert not thread.is_alive()
+        with worker._raw_jpeg_condition:
+            worker._raw_jpeg_frame = b"three"
+            worker._raw_jpeg_version = 3
+            worker._raw_jpeg_capture_version = 30
+        latest = next(stream)
+        assert latest.endswith(b"three\r\n")
+        assert b"X-Frame-Sequence: 30\r\n" in latest
+    finally:
+        worker.stop()
+        thread.join(2)
+        stream.close()
+
+
+def test_annotated_metadata_stays_attached_to_encoded_frame(monkeypatch, worker):
+    worker._viewer_aware_jpeg = False
+    monkeypatch.setattr(camera_module.cv2, "imencode", Mock(return_value=(True, np.array([1, 2], dtype=np.uint8))))
+    assert worker._encode_frame(object(), captured_at=12.5, capture_version=7)
+    worker._result_capture_version = 99  # Later completion telemetry cannot relabel the JPEG.
+    stream = worker.frames()
+    try:
+        part = next(stream)
+        assert b"X-Frame-Sequence: 7\r\n" in part
+        assert b"X-Captured-At: 12.500000\r\n" in part
+        assert part.endswith(b"\x01\x02\r\n")
+    finally:
+        stream.close()
+
+
+def test_raw_fps_excludes_previous_viewer_session_idle_gap(monkeypatch, worker):
+    clock = [10.0]
+    worker.online = True
+    worker._raw_viewers = 1
+    worker._raw_frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    worker._raw_version = 1
+    waits = []
+    monkeypatch.setattr(camera_module.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(camera_module.cv2, "imencode", Mock(return_value=(True, np.array([1], dtype=np.uint8))))
+
+    def wait(_seconds):
+        waits.append(_seconds)
+        if len(waits) == 1:
+            # Represent a new first viewer after a long idle session.
+            clock[0] += 60
+            worker._raw_view_generation += 1
+            worker._raw_version += 1
+            worker.raw_video_fps = 33.0
+        else:
+            worker._stop.set()
+
+    monkeypatch.setattr(worker._stop, "wait", wait)
+    worker._raw_stream_loop()
+    assert len(waits) == 2
+    assert worker.raw_video_fps == 0
+
+
+@pytest.mark.parametrize("raw", [False, True])
+def test_capture_and_raw_fps_count_windows_instead_of_driver_burst_rates(monkeypatch, worker, raw):
+    clock = [1.0]
+    completed = [0]
+    worker.online = True
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    monkeypatch.setattr(camera_module.time, "perf_counter", lambda: clock[0])
+    if raw:
+        worker._raw_viewers = 1
+        worker._raw_frame = frame
+        worker._raw_version = 1
+        monkeypatch.setattr(camera_module.cv2, "imencode", Mock(return_value=(True, np.array([1], dtype=np.uint8))))
+
+        def wait(_seconds):
+            completed[0] += 1
+            worker._raw_version += 1
+            clock[0] = 1.00001 if completed[0] == 1 else 2.01
+            if completed[0] == 3:
+                worker._stop.set()
+
+        monkeypatch.setattr(worker._stop, "wait", wait)
+        worker._raw_stream_loop()
+        assert worker.raw_video_fps == 2.0
+    else:
+        capture = Mock()
+        capture.isOpened.return_value = True
+
+        def read():
+            completed[0] += 1
+            clock[0] = [1.0, 1.00001, 2.01][completed[0]-1]
+            if completed[0] == 3:
+                worker._stop.set()
+            return True, frame
+
+        capture.read.side_effect = read
+        monkeypatch.setattr(worker, "_open_capture", lambda: capture)
+        worker._capture_loop()
+        assert worker.capture_fps == 2.0
 
 
 def test_capture_loop_marks_unavailable_webcam_offline_without_crashing(monkeypatch, worker):
@@ -257,6 +408,12 @@ def test_offline_telemetry_hides_stale_detection_values(worker):
         "online": False,
         "testMirror": False,
         "captureFps": None,
+        "video": {
+            "rawFps": None, "rawEncodeMs": None, "rawFrameAgeMs": None,
+            "rawFrameSequence": None, "rawViewers": 0, "captureResolution": None,
+            "reportedCaptureFps": None, "captureBufferSizeAccepted": None,
+            "detectionFrameSequence": None,
+        },
         "fps": None,
         "processingMs": None,
         "frameAgeMs": None,
@@ -270,6 +427,12 @@ def test_offline_telemetry_hides_stale_detection_values(worker):
         "totalVehicles": None,
         "expectedVehicles": None,
         "vehicleCountState": "OFFLINE",
+        "processingHealth": "not_started",
+        "processingError": None,
+        "displayError": None,
+        "captureAgeMs": None,
+        "resultAgeMs": None,
+        "processingThreadAlive": False,
     }
 
 
@@ -312,7 +475,7 @@ def test_frames_yields_multipart_jpeg_payload(worker):
 
     stream = worker.frames()
 
-    assert next(stream) == b"--frame\r\nContent-Type: image/jpeg\r\n\r\njpeg-data\r\n"
+    assert next(stream) == b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 9\r\n\r\njpeg-data\r\n"
     stream.close()
 
 
@@ -338,7 +501,7 @@ def test_first_viewer_waits_for_fresh_shared_encode_and_disconnect_cleans_up(mon
         first_thread.join(timeout=2)
         second_thread.join(timeout=2)
         assert not first_thread.is_alive() and not second_thread.is_alive()
-        assert first_received == second_received == [b"--frame\r\nContent-Type: image/jpeg\r\n\r\n\x01\x02\x03\r\n"]
+        assert first_received == second_received == [b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 3\r\n\r\n\x01\x02\x03\r\n"]
         encode.assert_called_once()
     finally:
         worker.stop()
@@ -375,6 +538,165 @@ def test_encode_failure_does_not_publish_a_new_version(monkeypatch, worker):
     monkeypatch.setattr(camera_module.cv2, "imencode", Mock(return_value=(False, None)))
     assert worker._encode_frame(object()) is False
     assert worker._jpeg_version == 0
+
+
+def test_annotated_encoder_exception_is_diagnostic_and_does_not_publish(monkeypatch, worker):
+    worker._viewer_aware_jpeg = False
+    monkeypatch.setattr(camera_module.cv2, "imencode", Mock(side_effect=RuntimeError("bad frame")))
+
+    assert worker._encode_frame(object()) is False
+    assert worker._jpeg_version == 0
+    assert worker._jpeg_frame is None
+    assert worker.display_error == "Annotated JPEG encoding failed: bad frame"
+
+
+def test_successful_annotated_encode_clears_display_error(monkeypatch, worker):
+    worker._viewer_aware_jpeg = False
+    worker.display_error = "prior failure"
+    monkeypatch.setattr(camera_module.cv2, "imencode", Mock(return_value=(True, np.array([1], dtype=np.uint8))))
+
+    assert worker._encode_frame(object()) is True
+    assert worker.display_error is None
+    assert worker._jpeg_version == 1
+
+
+def test_raw_encoder_exception_is_diagnostic_and_does_not_publish(monkeypatch, worker):
+    worker.online = True
+    worker._raw_viewers = 1
+    worker._viewer_aware_jpeg = False
+    worker._raw_frame = np.zeros((4, 4, 3), dtype=np.uint8)
+    worker._raw_version = 1
+    worker._stop = StopAfterRetry()
+    monkeypatch.setattr(camera_module.cv2, "imencode", Mock(side_effect=RuntimeError("raw bad frame")))
+
+    worker._raw_stream_loop()
+
+    assert worker._raw_jpeg_version == 0
+    assert worker._raw_jpeg_frame is None
+    assert worker.display_error == "Raw JPEG encoding failed: raw bad frame"
+
+    monkeypatch.setattr(
+        camera_module.cv2,
+        "imencode",
+        Mock(return_value=(True, np.array([6], dtype=np.uint8))),
+    )
+    assert worker._encode_frame(worker._raw_frame) is True
+    assert worker.display_error == "Raw JPEG encoding failed: raw bad frame"
+
+    worker._stop = StopAfterRetry()
+    monkeypatch.setattr(
+        camera_module.cv2,
+        "imencode",
+        Mock(return_value=(True, np.array([7], dtype=np.uint8))),
+    )
+    worker._raw_stream_loop()
+    assert worker.display_error is None
+    assert worker._raw_jpeg_version == 1
+    assert worker._raw_jpeg_frame == b"\x07"
+
+
+def test_raw_recovery_does_not_clear_annotated_encoder_error(monkeypatch, worker):
+    worker.online = True
+    worker._raw_viewers = 1
+    worker._raw_frame = np.zeros((4, 4, 3), dtype=np.uint8)
+    worker._raw_version = 1
+    worker._viewer_aware_jpeg = False
+    monkeypatch.setattr(camera_module.cv2, "imencode", Mock(side_effect=RuntimeError("annotated failure")))
+    assert worker._encode_frame(worker._raw_frame) is False
+    assert worker.display_error == "Annotated JPEG encoding failed: annotated failure"
+
+    worker._stop = StopAfterRetry()
+    monkeypatch.setattr(
+        camera_module.cv2,
+        "imencode",
+        Mock(return_value=(True, np.array([8], dtype=np.uint8))),
+    )
+    worker._raw_stream_loop()
+    assert worker._raw_jpeg_version == 1
+    assert worker.display_error == "Annotated JPEG encoding failed: annotated failure"
+
+    assert worker._encode_frame(worker._raw_frame) is True
+    assert worker.display_error is None
+
+
+def test_diagnostic_ages_are_software_capture_and_result_ages(monkeypatch, worker):
+    worker._latest_capture_at = 10.0
+    worker._latest_result_at = 8.5
+    monkeypatch.setattr(camera_module.time, "perf_counter", lambda: 12.0)
+
+    payload = worker.telemetry()
+
+    assert payload["captureAgeMs"] == 2000.0
+    assert payload["resultAgeMs"] == 3500.0
+    assert payload["frameAgeMs"] is None
+
+
+def test_inference_exception_latches_health_and_stops_processing(worker):
+    worker.online = True
+    worker._raw_frame = np.zeros((4, 4, 3), dtype=np.uint8)
+    worker._raw_version = 1
+    worker._stop = StopAfterRetry()
+    worker.detector.process = Mock(side_effect=RuntimeError("inference failed"))
+
+    worker._processing_loop()
+
+    assert worker.detector.process.call_count == 1
+    assert worker.processing_health == "failed"
+    assert worker.processing_error == "Inference failed: inference failed"
+    assert worker.online is True
+    assert worker.telemetry()["processingHealth"] == "failed"
+
+
+def test_annotated_encode_failure_does_not_skip_transaction_callback(monkeypatch, worker):
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    worker._viewer_aware_jpeg = False
+    worker._raw_frame = frame
+    worker._raw_captured_at = time.perf_counter()
+    worker._raw_version = 1
+    worker._stop = StopAfterRetry()
+    worker.detection_handler = Mock()
+    worker.detector.process = Mock(return_value=(frame, []))
+    monkeypatch.setattr(camera_module.cv2, "imencode", Mock(side_effect=RuntimeError("encode failed")))
+    monkeypatch.setattr(worker, "_wait_for_processing_deadline", worker._stop.wait)
+
+    worker._processing_loop()
+
+    worker.detector.process.assert_called_once()
+    np.testing.assert_array_equal(worker.detector.process.call_args.args[0], frame)
+    worker.detection_handler.assert_called_once_with(1, [])
+    assert worker.processing_error is None
+    assert worker.processing_health == "stopped"
+    assert worker.display_error == "Annotated JPEG encoding failed: encode failed"
+
+
+def test_capture_overwrite_diagnostics_keep_one_frame_buffer(monkeypatch, worker):
+    class StopAfterThreeFrames:
+        checks = 0
+
+        def is_set(self):
+            self.checks += 1
+            return self.checks >= 5
+
+        def wait(self, _timeout):
+            return True
+
+    frames = [object(), object(), object()]
+    capture = Mock()
+    capture.isOpened.return_value = True
+    capture.set.return_value = True
+    capture.read.side_effect = [(True, frame) for frame in frames]
+    monkeypatch.setattr(camera_module.cv2, "VideoCapture", Mock(return_value=capture))
+    worker.profiler.enabled = True
+    worker._stop = StopAfterThreeFrames()
+
+    worker._capture_loop()
+
+    assert worker._raw_frame is frames[-1]
+    assert worker._raw_version == 3
+    assert worker._capture_overwritten_versions == 2
+    assert worker._capture_buffer_size_requested == 1
+    assert worker._capture_buffer_size_accepted is True
+    assert worker._capture_read_ms is not None
 
 
 @pytest.mark.parametrize("viewer_aware", [False, True])
@@ -430,8 +752,21 @@ def test_inflight_encode_from_previous_viewer_session_is_discarded(monkeypatch, 
 def test_optional_profile_exposes_timings_and_resources_only_when_enabled(monkeypatch, worker):
     assert "performance" not in worker.telemetry()
     worker.profiler.enabled = True
+    worker._capture_read_ms = 5.0
+    worker._frame_copy_ms = 2.0
+    worker._buffer_wait_ms = 10.0
+    worker._buffer_age_ms = 3.0
+    worker._capture_buffer_size_requested = 1
+    worker._capture_buffer_size_accepted = False
     monkeypatch.setattr(camera_module.PROCESS_SAMPLER, "snapshot", lambda: {"processRssMb": 10})
-    assert worker.telemetry()["performance"]["processRssMb"] == 10
+    performance = worker.telemetry()["performance"]
+    assert performance["processRssMb"] == 10
+    assert performance["captureReadMs"] == 5.0
+    assert performance["frameCopyMs"] == 2.0
+    assert performance["bufferWaitMs"] == 10.0
+    assert performance["bufferAgeMs"] == 3.0
+    assert performance["captureBufferSizeRequested"] == 1
+    assert performance["captureBufferSizeAccepted"] is False
 
 
 @pytest.mark.parametrize("case", ["remaining", "expired", "stopped", "stop_during_sleep"])
@@ -510,7 +845,7 @@ def test_processing_deadline_budgets_copy_and_reanchors_without_catchup(monkeypa
     worker._raw_condition = Condition()
     worker.detector.process = Mock(side_effect=detect)
     monkeypatch.setattr(worker, "_draw_transaction_counts", lambda _frame: None)
-    monkeypatch.setattr(worker, "_encode_frame", lambda _frame: False)
+    monkeypatch.setattr(worker, "_encode_frame", lambda _frame, **_metadata: False)
     monkeypatch.setattr(worker, "_wait_for_processing_deadline", wait)
     monkeypatch.setattr(camera_module.time, "perf_counter", lambda: clock[0])
     monkeypatch.setattr(camera_module.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay))
@@ -563,7 +898,7 @@ def test_processing_unavailable_delayed_repeated_and_reconnected_frames(monkeypa
     worker._raw_condition = Condition()
     worker.detector.process = Mock(side_effect=detect)
     monkeypatch.setattr(worker, "_draw_transaction_counts", lambda _frame: None)
-    monkeypatch.setattr(worker, "_encode_frame", lambda _frame: False)
+    monkeypatch.setattr(worker, "_encode_frame", lambda _frame, **_metadata: False)
     monkeypatch.setattr(camera_module.time, "perf_counter", lambda: clock[0])
     monkeypatch.setattr(camera_module.time, "sleep", waits.append)
     worker._processing_loop()

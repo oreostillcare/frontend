@@ -1,6 +1,9 @@
+import importlib
+
 import pytest
 
-from config import env_bool, env_camera_url, env_csv, env_float, env_int, mask_rtsp_url
+import config
+from config import Settings, env_bool, env_camera_url, env_csv, env_float, env_int, mask_rtsp_url
 
 
 @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
@@ -60,4 +63,43 @@ def test_camera_stream_quality_rewriting(monkeypatch, url, quality, expected):
 )
 def test_rtsp_url_masking(url, expected):
     assert mask_rtsp_url(url) == expected
+
+
+def test_openvino_runtime_settings_defaults_and_normalizes_environment(monkeypatch):
+    monkeypatch.delenv("OPENVINO_REQUEST_MODE", raising=False)
+    monkeypatch.delenv("OPENVINO_PERFORMANCE_HINT", raising=False)
+    settings_class = importlib.reload(config).Settings
+    assert settings_class().openvino_request_mode == "shared"
+    assert settings_class().openvino_performance_hint == "LATENCY"
+
+    monkeypatch.setenv("OPENVINO_REQUEST_MODE", "ASYNC")
+    monkeypatch.setenv("OPENVINO_PERFORMANCE_HINT", "throughput")
+    settings_class = importlib.reload(config).Settings
+    assert settings_class().openvino_request_mode == "async"
+    assert settings_class().openvino_performance_hint == "THROUGHPUT"
+
+
+def test_openvino_request_timeout_defaults_and_rejects_nonpositive_values(monkeypatch):
+    monkeypatch.delenv("OPENVINO_REQUEST_TIMEOUT_MS", raising=False)
+    settings_class = importlib.reload(config).Settings
+    assert settings_class().openvino_request_timeout_ms == 5000
+
+    monkeypatch.setenv("OPENVINO_REQUEST_TIMEOUT_MS", "1250")
+    settings_class = importlib.reload(config).Settings
+    assert settings_class().openvino_request_timeout_ms == 1250
+    with pytest.raises(ValueError, match="OPENVINO_REQUEST_TIMEOUT_MS"):
+        settings_class(openvino_request_timeout_ms=0)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("OPENVINO_REQUEST_MODE", "maybe", "OPENVINO_REQUEST_MODE"),
+        ("OPENVINO_PERFORMANCE_HINT", "BALANCED", "OPENVINO_PERFORMANCE_HINT"),
+    ],
+)
+def test_openvino_runtime_settings_reject_unsupported_values(monkeypatch, field, value, message):
+    monkeypatch.setenv(field, value)
+    with pytest.raises(ValueError, match=message):
+        importlib.reload(config).Settings()
 

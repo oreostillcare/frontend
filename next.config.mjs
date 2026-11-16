@@ -1,6 +1,17 @@
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { parseEnv } from "node:util";
+
+// This checkout can live inside a workspace that owns the shared .env.
+// Load that exact file before reading config or bundling NEXT_PUBLIC_ values.
+const workspaceEnv = fileURLToPath(new URL("../.env", import.meta.url));
+if (existsSync(workspaceEnv)) {
+  Object.assign(process.env, parseEnv(readFileSync(workspaceEnv, "utf8")));
+}
+
 /** @type {import('next').NextConfig} */
 const detectionBackendUrl = (process.env.DETECTION_BACKEND_URL || "http://127.0.0.1:5000").replace(/\/$/, "");
-const allowedDevOrigins = (process.env.DASHBOARD_ALLOWED_DEV_ORIGINS || "192.168.0.103,192.168.56.1,192.168.1.12,169.254.199.14,192.168.1.11", "192.168.56.1")
+const allowedDevOrigins = (process.env.DASHBOARD_ALLOWED_DEV_ORIGINS || "192.168.0.103,192.168.56.1,192.168.1.12,169.254.199.14,192.168.1.11", "192.168.56.1","192.168.137.97","10.201.131.234")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);

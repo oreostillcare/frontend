@@ -11,11 +11,11 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\setup.ps1
 ```
 
-If Node.js is missing, the script automatically installs the current Node.js LTS release through Windows Package Manager (`winget`). Windows may request administrator approval. It then uses `npm ci` for the locked frontend dependencies, creates `backend/.venv`, installs `backend/requirements.txt`, creates local environment files from the committed examples without overwriting existing files, and verifies the bundled custom model. Edit `.env.local` and `backend/.env` after setup.
+If Node.js is missing, the script automatically installs the current Node.js LTS release through Windows Package Manager (`winget`). Windows may request administrator approval. It then uses `npm ci` for the locked frontend dependencies, creates `backend/.venv`, installs `backend/requirements-openvino.txt`, creates a root `.env` from `.env.example` only when missing, and verifies the configured inference models. Existing environment files are never overwritten. Both services use the root `.env`; Python retains `backend/.env` only as a fallback when the root file is absent.
 
 If `winget` is unavailable, install Node.js LTS manually from [nodejs.org](https://nodejs.org/) and rerun the script.
 
-The selected custom runtime weights are included at `backend/models/best.pt`; the live application uses only this checkpoint and does not load a COCO fallback. If the custom checkpoint is unavailable, the model reports offline instead of downloading another model. The training datasets are not needed to run detection. Other training outputs, videos, logs, environment files, virtual environments, and build output are deliberately excluded from Git. Dataset downloads are optional because they are large and their URLs are private:
+The live application defaults to two OpenVINO model directories under `backend/models/openvino/`: `trained_local_openvino_model` for tricycle, ebike, and jeepney, and `yolov8n_openvino_model` for common COCO vehicles. Each directory must contain its XML, BIN, `metadata.yaml`, and `smartroad-export.json`. These local exports are ignored by Git and must be supplied separately. Original `.pt` checkpoints are not required for OpenVINO inference; if present at the configured source paths, their hashes must match the exports. Artifact hashes, FP32 precision, image size, and class mappings remain validated. `backend/models/best.pt` is not selected by the default runtime. Set `INFERENCE_BACKEND=pytorch` only when explicitly using matching PyTorch checkpoints. Training datasets are not needed to run detection. Dataset downloads are optional because they are large and their URLs are private:
 
 ```powershell
 .\setup.ps1 -DownloadDatasets
@@ -28,7 +28,7 @@ npm ci
 npm run dev
 ```
 
-If PowerShell blocks `npm.ps1`, use `npm.cmd ci` and `npm.cmd run dev`. Copy `.env.example` to `.env.local` and configure Firebase plus `NEXT_PUBLIC_BACKEND_URL`. Never commit `.env.local`.
+If PowerShell blocks `npm.ps1`, use `npm.cmd ci` and `npm.cmd run dev`. Copy `.env.example` to the root `.env` only if it does not already exist, then configure Firebase and the server-only `DETECTION_BACKEND_URL`. Never commit `.env`. Do not create `.env.local`: Next.js gives that legacy filename precedence over `.env`, so move it aside yourself if it exists. Setup only warns about it and does not read or modify it.
 
 ## Firebase emulator integration tests
 
@@ -89,11 +89,11 @@ Authentication > Settings > Authorized domains. Production deployments also need
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements-openvino.txt
 python app.py
 ```
 
-If activation is blocked, run `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` followed by `.\.venv\Scripts\python.exe app.py`. Copy `.env.example` to `.env`, then set `LAPTOP_CAMERA_INDEX` if the webcam is not device `0`. The retained RTSP and Roboflow fields are placeholders for future/private values.
+If activation is blocked, run `.\.venv\Scripts\python.exe -m pip install -r requirements-openvino.txt` followed by `.\.venv\Scripts\python.exe app.py`. Configure the root `.env` shared with Next.js. Model paths are relative to `backend/`; set `WEB_CAMERA_INDEX` and `LOGI_C270_CAMERA_INDEX` to your discovered USB devices. An existing `backend/.env` is used only if the root `.env` is absent. The retained RTSP and Roboflow fields are placeholders for future/private values.
 
 The backend starts detection immediately; opening a browser does not create the camera or inference worker. For an offline, Flask-only view that does not require Next.js, Firebase, or internet access, open:
 

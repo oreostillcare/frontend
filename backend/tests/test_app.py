@@ -298,6 +298,10 @@ def test_display_mirror_never_activates_node_b_or_signal_io(app_module, client, 
 
 
 def test_raw_video_is_separate_and_requires_online_camera(app_module, client):
+    for path in ("/video/raw/camera/1", "/video/camera/1"):
+        response = client.get(path)
+        assert response.headers["Cache-Control"] == "no-store, no-transform"
+        assert response.headers["X-Accel-Buffering"] == "no"
     assert b"raw-jpeg-1" in client.get("/video/raw/camera/1").data
     assert b"fake-jpeg-1" in client.get("/video/camera/1").data
     assert client.get("/video/raw/camera/99").status_code == 404

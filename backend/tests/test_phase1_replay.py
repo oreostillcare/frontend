@@ -76,6 +76,7 @@ def test_recorded_replay_preserves_ids_annotations_counts_signals_and_completed_
                     local if name == "local" else coco, threading.RLock(), [0]
                 ),
                 paths={"local": path, "coco": path}, errors={},
+                runtime_path=lambda name: path,
             )
             detector = Detector(config, line, model_pool=pool, vehicle_registry=registry)
             process = detector.process

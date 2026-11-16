@@ -187,10 +187,25 @@ class ModelPool:
         self.backend = getattr(config, "inference_backend", "pytorch")
         if self.backend not in {"pytorch", "openvino"}:
             raise ValueError("INFERENCE_BACKEND must be pytorch or openvino")
+        self.request_mode = getattr(config, "openvino_request_mode", "shared")
+        if self.request_mode not in {"shared", "fair", "independent", "async"}:
+            raise ValueError("OPENVINO_REQUEST_MODE must be shared, fair, independent, or async")
+        self.performance_hint = getattr(config, "openvino_performance_hint", "LATENCY")
+        if self.performance_hint not in {"LATENCY", "THROUGHPUT"}:
+            raise ValueError("OPENVINO_PERFORMANCE_HINT must be LATENCY or THROUGHPUT")
         if any(getattr(config, key, 0) < 0 for key in (
             "cpu_inference_threads", "openvino_threads", "openvino_streams",
         )):
             raise ValueError("Thread and stream budgets must be nonnegative (0 keeps library defaults)")
+        if self.backend == "openvino" and getattr(config, "cpu_inference_threads", 0):
+            # OpenVINO's Ultralytics predictor initializes native runtime state
+            # during lazy setup. Set PyTorch's process-wide CPU budget before
+            # importing Ultralytics or loading either model. Construct the pool
+            # before inference workers start; this process-global budget is not
+            # safe to hot-retune after backend initialization.
+            import torch
+
+            torch.set_num_threads(config.cpu_inference_threads)
         self.compiled_models: dict[str, Any] = {}
         self.compiled_lock = threading.RLock()
         self.paths = {
@@ -204,7 +219,12 @@ class ModelPool:
         self.models: dict[str, Any | None] = {"local": None, "coco": None}
         self.class_ids: dict[str, list[int]] = {"local": [], "coco": []}
         self.errors: dict[str, str] = {}
-        self.locks = {"local": threading.RLock(), "coco": threading.RLock()}
+        if self.backend == "openvino" and self.request_mode == "fair":
+            from inference_scheduling import FairReentrantLock
+
+            self.locks = {"local": FairReentrantLock(), "coco": FairReentrantLock()}
+        else:
+            self.locks = {"local": threading.RLock(), "coco": threading.RLock()}
 
         requested = {"local": load_local, "coco": load_coco}
         try:
@@ -264,14 +284,23 @@ class ModelPool:
 
             predictor = predictor_factory(self.config, self.compiled_models, self.compiled_lock, name)
         session_model = self._tracker_session(template)
-        if getattr(self.config, "cpu_inference_threads", 0):
+        if self.backend != "openvino" and getattr(self.config, "cpu_inference_threads", 0):
             session_model.overrides["device"] = "cpu"
         return ModelSession(
             model=session_model,
-            inference_lock=self.locks[name],
+            inference_lock=(
+                threading.RLock()
+                if self.backend == "openvino" and self.request_mode in {"independent", "async"}
+                else self.locks[name]
+            ),
             class_ids=list(self.class_ids[name]),
             predictor=predictor,
         )
+
+    def runtime_path(self, name: str):
+        if self.backend == "openvino":
+            return getattr(self.config, f"{name}_openvino_model")
+        return self.paths[name]
 
     @property
     def online(self) -> bool:
@@ -280,7 +309,7 @@ class ModelPool:
     def status(self) -> dict:
         return {
             name: {
-                "weights": self.paths[name].name,
+                "weights": self.runtime_path(name).name,
                 "backend": self.backend,
                 "online": self.models[name] is not None,
                 "error": self.errors.get(name),
@@ -339,9 +368,9 @@ class Detector:
             self.model_type = "unavailable"
         active_weights = []
         if use_custom_model:
-            active_weights.append(self.model_pool.paths["local"].name)
+            active_weights.append(self.model_pool.runtime_path("local").name)
         if load_coco:
-            active_weights.append(self.model_pool.paths["coco"].name)
+            active_weights.append(self.model_pool.runtime_path("coco").name)
         self.weights = " + ".join(active_weights) if active_weights else None
         self.load_error = "; ".join(self.model_pool.errors.values()) or None
 
@@ -381,8 +410,12 @@ class Detector:
                 )
         if profiler.enabled:
             speeds = [getattr(result, "speed", None) or {} for result in results]
-            if speeds and all("inference" in speed for speed in speeds):
-                profiler.values[f"{prefix}InferenceMs"] = sum(speed["inference"] for speed in speeds)
+            # Ultralytics reports one timing dictionary per returned result. Keep
+            # each stage independent; TrackCallMs also includes tracker work,
+            # while LockWaitMs is recorded separately before lock acquisition.
+            for stage in ("preprocess", "inference", "postprocess"):
+                if speeds and all(stage in speed for speed in speeds):
+                    profiler.values[f"{prefix}{stage.title()}Ms"] = sum(speed[stage] for speed in speeds)
         detections = []
         for result in results:
             boxes = result.boxes

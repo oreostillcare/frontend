@@ -514,12 +514,13 @@ def vehicle_count(camera_id: int):
 
 @app.get("/api/model")
 def model():
+    models = model_pool.status()
     return jsonify(
         {
             "model": "dual",
-            "weights": "trained_local.pt + yolov8n.pt",
+            "weights": " + ".join(models[name]["weights"] for name in ("local", "coco")),
             "online": model_pool.online,
-            "models": model_pool.status(),
+            "models": models,
         }
     )
 
@@ -529,7 +530,8 @@ def video(camera_id: int):
     worker = camera_worker(1 if display_mirror and camera_id == 2 else camera_id)
     if worker is None:
         return jsonify({"error": "Camera not found"}), 404
-    return Response(worker.frames(), mimetype="multipart/x-mixed-replace; boundary=frame", headers={"Cache-Control": "no-store"})
+    return Response(worker.frames(), mimetype="multipart/x-mixed-replace; boundary=frame",
+                    headers={"Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no"})
 
 
 @app.get("/video/raw/camera/<int:camera_id>")
@@ -540,7 +542,7 @@ def raw_video(camera_id: int):
     if not worker.online:
         return jsonify({"error": "Camera offline"}), 503
     return Response(worker.raw_frames(), mimetype="multipart/x-mixed-replace; boundary=frame",
-                    headers={"Cache-Control": "no-store"})
+                    headers={"Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no"})
 
 
 if __name__ == "__main__":

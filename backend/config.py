@@ -4,10 +4,12 @@ import os
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
-# This is a local appliance-style service: the project .env is its source of
-# truth. Override stale variables inherited from a long-lived VS Code terminal.
+# Share the workspace .env with Next.js, falling back to the checkout/backend.
+# Never load .env.local. Override stale variables inherited from a terminal.
+workspace_env = BASE_DIR.parent.parent / ".env"
+project_env = workspace_env if workspace_env.exists() else BASE_DIR.parent / ".env"
 backend_env = BASE_DIR / ".env"
-load_dotenv(backend_env if backend_env.exists() else BASE_DIR.parent / ".env", override=True)
+load_dotenv(project_env if project_env.exists() else backend_env, override=True)
 
 def env_bool(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
@@ -66,7 +68,7 @@ class Settings:
     detection_fps: float = env_float("DETECTION_FPS", 5.0)
     performance_profiling: bool = env_bool("ENABLE_PERFORMANCE_PROFILING", False)
     viewer_aware_jpeg: bool = env_bool("ENABLE_VIEWER_AWARE_JPEG", True)
-    inference_backend: str = os.getenv("INFERENCE_BACKEND", "pytorch").strip().lower()
+    inference_backend: str = os.getenv("INFERENCE_BACKEND", "openvino").strip().lower()
     cpu_inference_threads: int = env_int("CPU_INFERENCE_THREADS", 0)
     local_openvino_model: Path = BASE_DIR / os.getenv(
         "LOCAL_OPENVINO_MODEL", "models/openvino/trained_local_openvino_model"
@@ -76,6 +78,9 @@ class Settings:
     )
     openvino_threads: int = env_int("OPENVINO_INFERENCE_THREADS", 0)
     openvino_streams: int = env_int("OPENVINO_NUM_STREAMS", 0)
+    openvino_request_mode: str = os.getenv("OPENVINO_REQUEST_MODE", "shared").strip().lower()
+    openvino_performance_hint: str = os.getenv("OPENVINO_PERFORMANCE_HINT", "LATENCY").strip().upper()
+    openvino_request_timeout_ms: int = int(os.getenv("OPENVINO_REQUEST_TIMEOUT_MS", "5000"))
     line_counting: bool = env_bool("ENABLE_LINE_COUNTING", True)
     line: tuple[int, int, int, int] = (env_int("LINE_X1", 0), env_int("LINE_Y1", 360), env_int("LINE_X2", 1280), env_int("LINE_Y2", 360))
     guide_green_y_percent: float = env_percentage("GUIDE_GREEN_Y_PERCENT", 15.0)
@@ -134,6 +139,14 @@ class Settings:
     traffic_firestore_timeout_seconds: float = env_float("TRAFFIC_FIRESTORE_TIMEOUT_SECONDS", 5.0)
     frontend_origins: tuple[str, ...] = env_csv("FRONTEND_ORIGIN", "http://localhost:3000")
     reconnect_seconds: float = env_float("CAMERA_RECONNECT_SECONDS", 3.0)
+
+    def __post_init__(self):
+        if self.openvino_request_mode not in {"shared", "fair", "independent", "async"}:
+            raise ValueError("OPENVINO_REQUEST_MODE must be shared, fair, independent, or async")
+        if self.openvino_performance_hint not in {"LATENCY", "THROUGHPUT"}:
+            raise ValueError("OPENVINO_PERFORMANCE_HINT must be LATENCY or THROUGHPUT")
+        if self.openvino_request_timeout_ms <= 0:
+            raise ValueError("OPENVINO_REQUEST_TIMEOUT_MS must be a positive integer")
 
 settings = Settings()
 

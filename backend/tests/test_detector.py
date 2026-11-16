@@ -81,6 +81,115 @@ def test_model_sessions_share_weights_but_not_predictors(monkeypatch, tmp_path):
     assert first.inference_lock is second.inference_lock
 
 
+@pytest.mark.parametrize("mode", ["independent", "async"])
+def test_openvino_request_flags_do_not_change_pytorch_model_locks(monkeypatch, tmp_path, mode):
+    local_path = tmp_path / "trained_local.pt"
+    coco_path = tmp_path / "yolov8n.pt"
+    local_path.write_bytes(b"local")
+    coco_path.write_bytes(b"coco")
+    model = fake_yolo({0: "tricycle", 1: "ebike", 2: "jeepney"})
+    monkeypatch.setitem(sys.modules, "ultralytics", SimpleNamespace(YOLO=Mock(return_value=model)))
+    config = SimpleNamespace(
+        local_yolo_model=local_path,
+        coco_yolo_model=coco_path,
+        openvino_request_mode=mode,
+    )
+    pool = ModelPool(config, load_coco=False)
+
+    first = pool.create_session("local")
+    second = pool.create_session("local")
+
+    assert first.inference_lock is second.inference_lock
+
+
+@pytest.mark.parametrize("mode", ["independent", "async"])
+def test_openvino_independent_modes_use_one_lock_per_session(monkeypatch, tmp_path, mode):
+    monkeypatch.setitem(
+        sys.modules,
+        "ultralytics.models.yolo.detect",
+        SimpleNamespace(DetectionPredictor=type("Predictor", (), {})),
+    )
+    config = SimpleNamespace(
+        inference_backend="openvino",
+        local_yolo_model=tmp_path / "source.pt",
+        coco_yolo_model=tmp_path / "coco.pt",
+        local_openvino_model=tmp_path / "local-export",
+        coco_openvino_model=tmp_path / "coco-export",
+        image_size=640,
+        openvino_request_mode=mode,
+    )
+    pool = ModelPool(config, load_local=False, load_coco=False)
+    pool.models["local"] = fake_yolo({0: "tricycle", 1: "ebike", 2: "jeepney"})
+    pool.class_ids["local"] = [0, 1, 2]
+
+    first = pool.create_session("local")
+    second = pool.create_session("local")
+
+    assert first.inference_lock is not second.inference_lock
+
+
+def test_openvino_pool_selects_export_directories_without_source_checkpoints(monkeypatch, tmp_path):
+    local_path = tmp_path / "trained_local.pt"
+    coco_path = tmp_path / "yolov8n.pt"
+    local_export = tmp_path / "trained_local_openvino_model"
+    coco_export = tmp_path / "yolov8n_openvino_model"
+    local_names = {0: "tricycle", 1: "ebike", 2: "jeepney"}
+    coco_names = {1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
+    yolo = Mock(side_effect=[fake_yolo(local_names), fake_yolo(coco_names)])
+    monkeypatch.setitem(sys.modules, "ultralytics", SimpleNamespace(YOLO=yolo))
+    monkeypatch.setattr("openvino_artifacts.validate_export", Mock(side_effect=[local_names, coco_names]))
+    config = SimpleNamespace(
+        inference_backend="openvino",
+        local_yolo_model=local_path,
+        coco_yolo_model=coco_path,
+        local_openvino_model=local_export,
+        coco_openvino_model=coco_export,
+        image_size=640,
+    )
+
+    pool = ModelPool(config)
+
+    assert pool.online is True
+    assert yolo.call_args_list == [
+        call(str(local_export), task="detect"),
+        call(str(coco_export), task="detect"),
+    ]
+    assert pool.status()["local"]["weights"] == local_export.name
+    assert pool.status()["coco"]["weights"] == coco_export.name
+    assert pool.runtime_path("local") == local_export
+    assert pool.runtime_path("coco") == coco_export
+
+
+def test_openvino_cpu_budget_is_set_before_ultralytics_load_and_keeps_cpu_device(monkeypatch, tmp_path):
+    calls = []
+    local_names = {0: "tricycle", 1: "ebike", 2: "jeepney"}
+    model = fake_yolo(local_names)
+    model.overrides["device"] = "intel:cpu"
+
+    def load_yolo(path, **kwargs):
+        calls.append(("yolo", path))
+        return model
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(set_num_threads=lambda count: calls.append(("threads", count))))
+    monkeypatch.setitem(sys.modules, "ultralytics", SimpleNamespace(YOLO=load_yolo))
+    monkeypatch.setattr("openvino_artifacts.validate_export", Mock(return_value=local_names))
+    class Predictor:
+        pass
+    monkeypatch.setitem(sys.modules, "ultralytics.models.yolo.detect", SimpleNamespace(DetectionPredictor=Predictor))
+    config = SimpleNamespace(
+        inference_backend="openvino", cpu_inference_threads=2, openvino_threads=0, openvino_streams=0,
+        local_yolo_model=tmp_path / "source.pt", coco_yolo_model=tmp_path / "coco.pt",
+        local_openvino_model=tmp_path / "local-export", coco_openvino_model=tmp_path / "coco-export",
+        image_size=640,
+    )
+
+    pool = ModelPool(config, load_coco=False)
+    session = pool.create_session("local")
+
+    assert calls == [("threads", 2), ("yolo", str(config.local_openvino_model))]
+    assert session.model.overrides["device"] == "intel:cpu"
+
+
 def test_active_vehicle_classes_exclude_etrike_and_unrelated_coco_classes():
     assert VEHICLE_CLASSES == {
         "car",
@@ -227,16 +336,42 @@ def test_optional_model_profile_keeps_inference_arguments_and_reports_result_spe
     instance = bare_detector()
     instance.profiler = StageProfiler(True)
     instance.config = SimpleNamespace(confidence=0.5, image_size=640)
-    model = SimpleNamespace(track=Mock(return_value=[SimpleNamespace(boxes=None, speed={"inference": 12.5})]))
+    model = SimpleNamespace(track=Mock(return_value=[SimpleNamespace(
+        boxes=None, speed={"preprocess": 2.0, "inference": 12.5, "postprocess": 3.0}
+    )]))
     session = ModelSession(model, threading.RLock(), [0])
     instance.local_session = session
     assert instance.tracked_detections(session, "frame", LOCAL_VEHICLES) == []
     assert instance.profiler.snapshot()["localInferenceMs"] == 12.5
+    assert instance.profiler.snapshot()["localPreprocessMs"] == 2.0
+    assert instance.profiler.snapshot()["localPostprocessMs"] == 3.0
     assert instance.profiler.snapshot()["localLockWaitMs"] >= 0
     assert instance.profiler.snapshot()["localTrackCallMs"] >= 0
     model.track.assert_called_once_with(
         "frame", persist=True, tracker="bytetrack.yaml", classes=[0], conf=0.5, imgsz=640, verbose=False
     )
+
+
+def test_optional_model_profile_sums_stage_timings_across_results():
+    instance = bare_detector()
+    instance.profiler = StageProfiler(True)
+    instance.config = SimpleNamespace(confidence=0.5, image_size=640)
+    model = SimpleNamespace(track=Mock(return_value=[
+        SimpleNamespace(boxes=None, speed={"preprocess": 1, "inference": 4, "postprocess": 2}),
+        SimpleNamespace(boxes=None, speed={"preprocess": 3, "inference": 5, "postprocess": 6}),
+    ]))
+    session = ModelSession(model, threading.RLock(), [0])
+    instance.local_session = session
+
+    instance.tracked_detections(session, "frame", LOCAL_VEHICLES)
+
+    assert instance.profiler.snapshot() == {
+        "localLockWaitMs": instance.profiler.snapshot()["localLockWaitMs"],
+        "localTrackCallMs": instance.profiler.snapshot()["localTrackCallMs"],
+        "localPreprocessMs": 4,
+        "localInferenceMs": 9,
+        "localPostprocessMs": 8,
+    }
 
 
 def test_process_returns_unchanged_frame_when_both_models_are_unavailable():
