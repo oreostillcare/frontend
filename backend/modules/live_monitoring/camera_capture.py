@@ -1,16 +1,30 @@
 import threading
+import re
 
 # Owns the camera worker loop, newest-frame buffering, processing, and MJPEG output.
 import time
 from collections import Counter
 
+from config import Settings, configure_rtsp_capture, mask_rtsp_url, settings
+
+configure_rtsp_capture(settings)
 import cv2
 
-from config import Settings, mask_rtsp_url
+try:
+    cv2.setLogLevel(0)
+except AttributeError:
+    pass
 from modules.live_monitoring.vehicle_detector import Detector, ModelPool, VEHICLE_CLASSES, draw_annotation_text
 from modules.live_monitoring.inference_performance import PROCESS_SAMPLER, StageProfiler
 from modules.live_monitoring.vehicle_identity import GlobalVehicleRegistry
 from modules.live_monitoring.usb_camera_devices import enumerate_usb_devices
+
+
+def sanitize_error(error, source) -> str:
+    message = str(error)
+    if isinstance(source, str):
+        message = message.replace(source, mask_rtsp_url(source))
+    return re.sub(r"(?i)rtsp://[^\s\"'<>]+", "configured camera source", message)
 
 
 class CameraWorker:
@@ -26,6 +40,7 @@ class CameraWorker:
         vehicle_registry: GlobalVehicleRegistry | None = None,
         detection_handler=None,
         transaction_state_provider=None,
+        discontinuity_handler=None,
     ):
         self.camera_id = camera_id
         self.source = source
@@ -40,8 +55,11 @@ class CameraWorker:
         self.detector.camera_id = camera_id
         self.detection_handler = detection_handler
         self.transaction_state_provider = transaction_state_provider
+        self.discontinuity_handler = discontinuity_handler
 
         self._stop = threading.Event()
+        self._reconnect_requested = threading.Event()
+        self._connection_lock = threading.RLock()
         self._capture_thread: threading.Thread | None = None
         self._processing_thread: threading.Thread | None = None
         self._raw_stream_thread: threading.Thread | None = None
@@ -63,6 +81,7 @@ class CameraWorker:
         self._last_selected_version = 0
         self._latest_capture_at: float | None = None
         self._latest_result_at: float | None = None
+        self._latest_result_capture_at: float | None = None
         self._capture_overwritten_versions = 0
         self._capture_read_ms: float | None = None
         self._frame_copy_ms: float | None = None
@@ -73,6 +92,12 @@ class CameraWorker:
         self._capture_resolution: tuple[int, int] | None = None
         self._capture_reported_fps: float | None = None
         self._result_capture_version = 0
+        self._capture_generation = 0
+        self._result_generation = 0
+        self._last_processed_generation = 0
+        self._last_repeat_signature = None
+        self._repeat_since: float | None = None
+        self.reconnect_attempts = 0
 
         self._jpeg_condition = threading.Condition()
         self._jpeg_frame: bytes | None = None
@@ -138,7 +163,8 @@ class CameraWorker:
         self._processing_thread.start()
 
     def stop(self) -> None:
-        self._stop.set()
+        with self._connection_lock:
+            self._stop.set()
         with self._raw_condition:
             self._raw_condition.notify_all()
         with self._jpeg_condition:
@@ -191,19 +217,73 @@ class CameraWorker:
             f"USB camera {self.camera_id} interrupted; reconnecting",
         )
 
-    def _mark_offline(self, error: str) -> None:
-        self.online = False
-        self.error = error
+    def _refresh_rtsp_staleness(self) -> None:
+        if not isinstance(self.source, str) or not self.online:
+            return
         with self._raw_condition:
-            self._raw_frame = None
-            self._raw_condition.notify_all()
-        with self._jpeg_condition:
-            self._jpeg_frame = None
-            self._jpeg_condition.notify_all()
-        with self._raw_jpeg_condition:
-            self._raw_jpeg_frame = None
-            self._raw_view_generation += 1
-            self._raw_jpeg_condition.notify_all()
+            captured_at = self._latest_capture_at
+        if (
+            captured_at is not None
+            and time.perf_counter() - captured_at
+            > max(0.1, getattr(self.config, "camera_stale_seconds", 5.0))
+        ):
+            self._mark_offline("RTSP frames are stale; reconnecting")
+
+    def is_observation_fresh(self) -> bool:
+        """True only after this active connection produced a recent, current frame result."""
+        self._refresh_rtsp_staleness()
+        with self._connection_lock:
+            if (
+                not self.online
+                or self._reconnect_requested.is_set()
+                or self.processing_health != "running"
+                or self.processing_error is not None
+                or self._latest_result_at is None
+                or self._latest_result_capture_at is None
+            ):
+                return False
+            max_age = max(0.1, getattr(self.config, "camera_stale_seconds", 5.0))
+            now = time.perf_counter()
+            return (
+                self._result_generation == self._capture_generation
+            and now - self._latest_result_at <= max_age
+            and now - self._latest_result_capture_at <= max_age
+            and self._latest_capture_at is not None
+            and now - self._latest_capture_at <= max_age
+                and self._latest_capture_at - self._latest_result_capture_at <= max_age
+            )
+
+    @staticmethod
+    def _frame_signature(frame):
+        # A tiny sample catches frozen RTSP output without hashing full-resolution frames.
+        height, width = frame.shape[:2]
+        return hash(frame[::max(1, height // 16), ::max(1, width // 16)].tobytes())
+
+    def _mark_offline(self, error: str) -> None:
+        with self._connection_lock:
+            self._reconnect_requested.set()
+            was_online = self.online
+            self.online = False
+            self.error = error
+            with self._raw_condition:
+                self._capture_generation += 1
+                self._latest_result_at = None
+                self._latest_result_capture_at = None
+                self._result_generation = 0
+                self._raw_frame = None
+                self._raw_condition.notify_all()
+            with self._jpeg_condition:
+                self._jpeg_frame = None
+                self._jpeg_condition.notify_all()
+            with self._raw_jpeg_condition:
+                self._raw_jpeg_frame = None
+                self._raw_view_generation += 1
+                self._raw_jpeg_condition.notify_all()
+            if was_online and self.discontinuity_handler is not None:
+                try:
+                    self.discontinuity_handler(self.camera_id, error)
+                except Exception:
+                    self.error = "Camera fault handling failed"
 
     def _capture_loop(self) -> None:
         last_capture_at: float | None = None
@@ -216,8 +296,16 @@ class CameraWorker:
             last_capture_at = None
             capture_count = 0
             self.capture_fps = 0.0
+            healthy = False
+            retry_delay = min(
+                max(0.1, getattr(self.config, "reconnect_seconds", 3.0))
+                * (2 ** min(self.reconnect_attempts, 10)),
+                max(0.1, getattr(self.config, "reconnect_max_seconds", 30.0)),
+            )
 
             try:
+                with self._connection_lock:
+                    self._reconnect_requested.clear()
                 capture = self._open_capture()
                 buffer_size_accepted = capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 with self._raw_condition:
@@ -229,17 +317,54 @@ class CameraWorker:
                 if not capture.isOpened():
                     self._mark_offline(unavailable_error)
                 else:
+                    with self._connection_lock:
+                        if self._stop.is_set() or self._reconnect_requested.is_set():
+                            break
+                        with self._raw_condition:
+                            self._capture_generation += 1
+                            self._latest_result_at = None
+                            self._latest_result_capture_at = None
+                            self._result_generation = 0
+                            self._raw_frame = None
+                            self._capture_reported_fps = capture.get(cv2.CAP_PROP_FPS)
+                            self._raw_condition.notify_all()
+                    self._last_repeat_signature = None
+                    self._repeat_since = None
                     self._capture_reported_fps = capture.get(cv2.CAP_PROP_FPS)
                     while not self._stop.is_set():
-                        read_started_at = time.perf_counter() if self.profiler.enabled else None
+                        if self._reconnect_requested.is_set():
+                            break
+                        read_started_at = time.perf_counter()
                         ok, frame = capture.read()
                         captured_at = time.perf_counter()
-                        if read_started_at is not None:
+                        read_duration = captured_at - read_started_at
+                        if self.profiler.enabled:
                             with self._raw_condition:
-                                self._capture_read_ms = round((captured_at - read_started_at) * 1000, 2)
+                                self._capture_read_ms = round(read_duration * 1000, 2)
+                        if (
+                            isinstance(self.source, str)
+                            and read_duration > max(0.1, getattr(self.config, "camera_stale_seconds", 5.0))
+                        ):
+                            self._mark_offline("RTSP frame read timed out; reconnecting")
+                            break
+                        if self._reconnect_requested.is_set():
+                            break
                         if not ok or frame is None:
                             self._mark_offline(interrupted_error)
                             break
+
+                        if isinstance(self.source, str):
+                            signature = self._frame_signature(frame)
+                            if signature != self._last_repeat_signature:
+                                self._last_repeat_signature = signature
+                                self._repeat_since = captured_at
+                            elif (
+                                self._repeat_since is not None
+                                and captured_at - self._repeat_since
+                                >= max(0.1, getattr(self.config, "camera_repeat_seconds", 10.0))
+                            ):
+                                self._mark_offline("RTSP stream stopped changing; reconnecting")
+                                break
 
                         if last_capture_at is not None:
                             capture_count += 1
@@ -256,20 +381,23 @@ class CameraWorker:
                         # This is intentionally a one-frame overwrite buffer. The
                         # detector always receives the newest frame, so stale camera
                         # frames never form a processing queue.
-                        with self._raw_condition:
-                            if self._raw_version > self._last_selected_version:
-                                self._capture_overwritten_versions += 1
-                            self._raw_frame = frame
-                            self._raw_captured_at = captured_at
-                            self._raw_version += 1
-                            self._latest_capture_at = captured_at
-                            shape = getattr(frame, "shape", None)
-                            if shape is not None:
-                                self._capture_resolution = (shape[1], shape[0])
-                            self._raw_condition.notify_all()
-
-                        self.online = True
-                        self.error = None
+                        with self._connection_lock:
+                            if self._stop.is_set() or self._reconnect_requested.is_set():
+                                break
+                            with self._raw_condition:
+                                if self._raw_version > self._last_selected_version:
+                                    self._capture_overwritten_versions += 1
+                                self._raw_frame = frame
+                                self._raw_captured_at = captured_at
+                                self._raw_version += 1
+                                self._latest_capture_at = captured_at
+                                shape = getattr(frame, "shape", None)
+                                if shape is not None:
+                                    self._capture_resolution = (shape[1], shape[0])
+                                self._raw_condition.notify_all()
+                            self.online = True
+                            self.error = None
+                        healthy = True
             except (cv2.error, OSError, RuntimeError):
                 self._mark_offline(unavailable_error)
             finally:
@@ -279,7 +407,11 @@ class CameraWorker:
                     except (cv2.error, OSError, RuntimeError):
                         pass
 
-            self._stop.wait(self.config.reconnect_seconds)
+            if healthy:
+                self.reconnect_attempts = 0
+            else:
+                self.reconnect_attempts += 1
+            self._stop.wait(retry_delay)
 
     def _wait_for_processing_deadline(self, deadline: float) -> None:
         # Match the validated pacing without spinning; requested sleeps are <= 10 ms.
@@ -316,8 +448,16 @@ class CameraWorker:
                 frame = self._raw_frame.copy()
                 selected_at = time.perf_counter() if self.profiler.enabled else None
                 captured_at = self._raw_captured_at
+                generation = self._capture_generation
                 last_raw_version = self._raw_version
                 self._last_selected_version = last_raw_version
+
+            if generation != self._last_processed_generation:
+                self.detector.reset_tracking_state()
+                registry = getattr(self.detector, "vehicle_registry", None)
+                if registry is not None:
+                    registry.forget_camera(self.camera_id)
+                self._last_processed_generation = generation
 
             if wait_started_at is not None and copy_started_at is not None and selected_at is not None:
                 with self._raw_condition:
@@ -325,32 +465,56 @@ class CameraWorker:
                     self._frame_copy_ms = round((selected_at - copy_started_at) * 1000, 2)
                     self._buffer_age_ms = round((selected_at - captured_at) * 1000, 2)
 
+            stale_limit = max(0.1, getattr(self.config, "camera_stale_seconds", 5.0))
+            if isinstance(self.source, str) and time.perf_counter() - captured_at > stale_limit:
+                self._mark_offline("RTSP inference input became stale; reconnecting")
+                continue
+
             started_at = time.perf_counter()
             try:
                 annotated, detections = self.detector.process(frame)
             except Exception as error:
-                self.processing_error = f"Inference failed: {error}"
-                self.processing_health = "failed"
+                with self._connection_lock:
+                    self.processing_error = f"Inference failed: {sanitize_error(error, self.source)}"
+                    self.processing_health = "failed"
                 if self.profiler.enabled:
                     self._performance = {**self.profiler.snapshot(), "processingHealth": self.processing_health}
                 # Tracker state may have been mutated before the exception.
                 # Keep capture alive for readiness and diagnostics, but do not
                 # retry inference on the possibly inconsistent tracker.
                 return
-            with self.profiler.measure("transactionMs"):
-                if self.detection_handler is not None:
-                    try:
-                        self.detection_handler(self.camera_id, detections)
-                    except Exception as error:
-                        self.error = f"Traffic transaction event error: {error}"
-            # This also updates telemetry state, so it must run without viewers.
-            with self.profiler.measure("transactionOverlayMs"):
-                self._draw_transaction_counts(annotated)
-            encoded = self._encode_frame(annotated, captured_at=captured_at, capture_version=last_raw_version)
-            completed_at = time.perf_counter()
-            self._latest_result_at = completed_at
-            self._result_capture_version = last_raw_version
-            self.processing_health = "running"
+            result_is_stale = False
+            with self._connection_lock:
+                if generation != self._capture_generation:
+                    continue
+                result_is_stale = time.perf_counter() - captured_at > stale_limit
+                if not result_is_stale:
+                    with self.profiler.measure("transactionMs"):
+                        if self.detection_handler is not None:
+                            try:
+                                self.detection_handler(self.camera_id, detections)
+                            except Exception as error:
+                                self.error = f"Traffic transaction event error: {sanitize_error(error, self.source)}"
+                    # This also updates telemetry state, so it must run without viewers.
+                    with self.profiler.measure("transactionOverlayMs"):
+                        self._draw_transaction_counts(annotated)
+                    encoded = self._encode_frame(
+                        annotated,
+                        captured_at=captured_at,
+                        capture_version=last_raw_version,
+                        capture_generation=generation,
+                    )
+                    completed_at = time.perf_counter()
+                    if generation != self._capture_generation:
+                        continue
+                    self._latest_result_at = completed_at
+                    self._latest_result_capture_at = captured_at
+                    self._result_generation = generation
+                    self._result_capture_version = last_raw_version
+                    self.processing_health = "running"
+            if result_is_stale:
+                self._mark_offline("RTSP inference result became stale; reconnecting")
+                continue
 
             zone_detections = [item for item in detections if item.get("inTrafficZone")]
             self.visible = len({item["trackId"] for item in zone_detections})
@@ -384,7 +548,16 @@ class CameraWorker:
         if self.processing_health != "failed":
             self.processing_health = "stopped"
 
-    def _encode_frame(self, frame, *, captured_at: float | None = None, capture_version: int | None = None) -> bool:
+    def _encode_frame(
+        self,
+        frame,
+        *,
+        captured_at: float | None = None,
+        capture_version: int | None = None,
+        capture_generation: int | None = None,
+    ) -> bool:
+        if capture_generation is not None and capture_generation != self._capture_generation:
+            return False
         with self._jpeg_condition:
             generation = self._viewer_generation
             if self._viewer_aware_jpeg and self._viewer_count == 0:
@@ -398,10 +571,12 @@ class CameraWorker:
                 raise RuntimeError("JPEG encoder returned failure")
             jpeg_bytes = jpeg.tobytes()
         except Exception as error:
-            self._annotated_display_error = f"Annotated JPEG encoding failed: {error}"
+            self._annotated_display_error = f"Annotated JPEG encoding failed: {sanitize_error(error, self.source)}"
             return False
         with self._jpeg_condition:
-            # A new first viewer must not receive an encode from an old session.
+            # A new first viewer or camera connection must not receive an old encode.
+            if capture_generation is not None and capture_generation != self._capture_generation:
+                return False
             if self._viewer_aware_jpeg and (
                 self._viewer_count == 0 or generation != self._viewer_generation
             ):
@@ -502,7 +677,7 @@ class CameraWorker:
                 jpeg_bytes = jpeg.tobytes()
                 encoded_at = time.perf_counter()
             except Exception as error:
-                self._raw_display_error = f"Raw JPEG encoding failed: {error}"
+                self._raw_display_error = f"Raw JPEG encoding failed: {sanitize_error(error, self.source)}"
                 self._stop.wait(1 / max(.1, getattr(self.config, "raw_stream_fps", 10.0)))
                 continue
             with self._raw_jpeg_condition:
@@ -607,6 +782,7 @@ class CameraWorker:
                 self._jpeg_condition.notify_all()
 
     def telemetry(self) -> dict:
+        self._refresh_rtsp_staleness()
         passed = self.detector.track_state.passed if self.online and self.config.line_counting else None
         incoming_ledger = getattr(self.detector, "incoming_ledger", None)
         incoming_vehicles, incoming_points = (
@@ -639,6 +815,9 @@ class CameraWorker:
             "id": self.camera_id,
             "configured": self._source_is_configured(self.source),
             "online": self.online,
+            "captureError": self.error,
+            "observationFresh": self.is_observation_fresh(),
+            "reconnectAttempts": self.reconnect_attempts,
             "testMirror": False,
             "captureFps": self.capture_fps if self.online else None,
             "video": video,

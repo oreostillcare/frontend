@@ -35,6 +35,7 @@ class FakeCameraWorker:
         vehicle_registry=None,
         detection_handler=None,
         transaction_state_provider=None,
+        discontinuity_handler=None,
     ):
         self.camera_id = camera_id
         self.source = source
@@ -44,6 +45,7 @@ class FakeCameraWorker:
         self.vehicle_registry = vehicle_registry
         self.detection_handler = detection_handler
         self.transaction_state_provider = transaction_state_provider
+        self.discontinuity_handler = discontinuity_handler
         self.started = False
         self.stopped = False
         self.online = source not in (None, "", -1)
@@ -94,8 +96,9 @@ def app_module(monkeypatch, request):
     FakeCameraWorker.instances = []
     test_settings = SimpleNamespace(
         observation_only=True,
-        node_b_display_mirror=getattr(request, "param", False),
+        node_b_display_mirror=getattr(request, "param", False) is True,
         camera_1_source="rtsp" if getattr(request, "param", False) else "usb",
+        camera_2_source="rtsp" if getattr(request, "param", False) == "dual-rtsp" else "usb",
         # Deliberately unsafe legacy flags: the independent test guard must win.
         esp32_control_enabled=True,
         esp32_heartbeat_enabled=True,
@@ -144,6 +147,50 @@ def test_import_starts_two_independent_usb_workers(app_module):
     assert all(worker.started for worker in FakeCameraWorker.instances)
     assert FakeCameraWorker.instances[0].model_pool is FakeCameraWorker.instances[1].model_pool
     assert FakeCameraWorker.instances[0].vehicle_registry is FakeCameraWorker.instances[1].vehicle_registry
+
+
+@pytest.mark.parametrize("app_module", ["dual-rtsp"], indirect=True)
+def test_dual_rtsp_mapping_and_streams_are_independent(app_module, client):
+    assert app_module.workers[1].source == "rtsp://camera-a.test/stream1"
+    assert app_module.workers[2].source == "rtsp://camera-b.test/stream1"
+    payload = client.get("/api/cameras").get_json()
+    assert [camera["node"] for camera in payload] == ["Node A", "Node B"]
+    assert all(not camera["testMirror"] for camera in payload)
+    assert b"rtsp://" not in client.get("/api/cameras").data
+    for camera_id in (1, 2):
+        assert f"fake-jpeg-{camera_id}".encode() in client.get(f"/video/camera/{camera_id}").data
+        assert f"raw-jpeg-{camera_id}".encode() in client.get(f"/video/raw/camera/{camera_id}").data
+    app_module.workers[1].online = False
+    assert client.get("/api/cameras/1").get_json()["online"] is False
+    assert client.get("/api/cameras/2").get_json()["online"] is True
+
+
+def test_stale_capture_inhibits_node_readiness(app_module, monkeypatch):
+    monkeypatch.setattr(app_module.transaction_manager, "queue_view", lambda _: {"fresh": True, "behindGreenVehicles": 0})
+    app_module.workers[1].is_observation_fresh = lambda: False
+    app_module.workers[2].is_observation_fresh = lambda: True
+    assert app_module.read_node_points()["nodeA"]["ready"] is False
+    assert app_module.read_node_points()["nodeB"]["ready"] is True
+
+
+def test_quick_reconnection_fault_stays_latched_until_supervised_reset(app_module):
+    worker = app_module.workers[1]
+    worker.discontinuity_handler(1, "Camera stream interrupted; reconnecting")
+    manager = app_module.transaction_manager
+    assert manager.snapshot()["blockedReason"]
+    assert manager.queue_view(1)["fresh"] is False
+    # A later healthy connection cannot authorize a batch across a lost interval.
+    worker.online = True
+    assert manager.begin_timer("nodeA", []) is None
+    assert manager.snapshot()["blockedReason"]
+    manager.reset()
+    assert manager.snapshot()["blockedReason"] is None
+
+
+def test_source_switch_rejects_same_rtsp_host_different_profile(app_module, client):
+    assert client.post("/api/cameras/1/source", json={"sourceId": "rtsp-1"}).status_code == 200
+    app_module.SOURCE_VALUES["rtsp-2"] = "rtsp://different:account@camera-a.test/stream2"
+    assert client.post("/api/cameras/2/source", json={"sourceId": "rtsp-2"}).status_code == 409
 
 
 def test_timer_countdown_is_exposed_to_website_without_enabling_signal_io(app_module):

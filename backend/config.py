@@ -1,6 +1,8 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import os
+import math
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -38,11 +40,54 @@ def env_csv(name: str, default: str) -> tuple[str, ...]:
     return tuple(value.strip() for value in os.getenv(name, default).split(",") if value.strip())
 
 def env_camera_url(name: str) -> str:
-    url = os.getenv(name, "")
-    quality = os.getenv("CAMERA_STREAM_QUALITY", "").strip().lower()
-    if quality in {"stream1", "stream2"} and url.rstrip("/").endswith(("stream1", "stream2")):
-        return f"{url.rstrip('/')[:-7]}{quality}"
-    return url
+    url = os.getenv(name, "").strip()
+    if not url:
+        return ""
+    prefix = name.removesuffix("_RTSP_URL")
+    try:
+        # Split userinfo first so reserved characters in a legacy password do
+        # not become a path, query or fragment. Separate fields are unambiguous.
+        scheme, address = url.split("://", 1)
+        userinfo, separator, address_without_auth = address.rpartition("@")
+        parts = urlsplit(f"{scheme}://{address_without_auth if separator else address}")
+        if parts.scheme != "rtsp" or not parts.hostname or parts.port == 0:
+            raise ValueError()
+        username = os.getenv(f"{prefix}_USERNAME")
+        password = os.getenv(f"{prefix}_PASSWORD")
+        if username is not None or password is not None:
+            if not username or password is None:
+                raise ValueError()
+        elif separator:
+            username, colon, password = userinfo.partition(":")
+            if not colon or not username:
+                raise ValueError()
+            username, password = unquote(username), unquote(password)
+        auth = f"{quote(username, safe='')}:{quote(password, safe='')}@" if username is not None else ""
+        quality = os.getenv(f"{prefix}_STREAM_QUALITY", os.getenv("CAMERA_STREAM_QUALITY", "")).strip().lower()
+        if quality and quality not in {"stream1", "stream2"}:
+            raise ValueError()
+        path = parts.path
+        if quality and path.rstrip("/").endswith(("/stream1", "/stream2")):
+            path = path.rstrip("/")[:-7] + quality
+        return urlunsplit((parts.scheme, auth + parts.netloc, path, parts.query, parts.fragment))
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid {name} or camera credentials/profile; inspect server-side configuration") from None
+
+
+def configure_rtsp_capture(config) -> None:
+    """Set FFmpeg options once before capture threads; never mutate per worker."""
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"rtsp_transport;{getattr(config, 'rtsp_transport', 'tcp')}"
+    # Native decoder errors can include authenticated URLs. Application status
+    # supplies sanitized faults instead of forwarding native log text.
+    os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "-8"
+    os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
+
+
+def camera_input_identity(source):
+    if isinstance(source, str) and source.startswith("rtsp://"):
+        # Different profiles/accounts on one host still represent one camera.
+        return ("rtsp", (urlsplit(source).hostname or "").lower().rstrip("."))
+    return source
 
 @dataclass(frozen=True)
 class Settings:
@@ -57,9 +102,13 @@ class Settings:
     # Independent of mirror mode. Local prototypes cannot operate roadside lights.
     observation_only: bool = env_bool("SMARTROAD_OBSERVATION_ONLY", True)
     rtsp_timeout_ms: int = env_int("RTSP_TIMEOUT_MS", 5000)
+    rtsp_transport: str = os.getenv("RTSP_TRANSPORT", "tcp").strip().lower()
+    camera_stale_seconds: float = env_float("CAMERA_STALE_SECONDS", 5.0)
+    camera_repeat_seconds: float = env_float("CAMERA_REPEAT_SECONDS", 10.0)
+    reconnect_max_seconds: float = env_float("CAMERA_RECONNECT_MAX_SECONDS", 30.0)
     raw_stream_fps: float = env_float("RAW_STREAM_FPS", 10.0)
-    camera_1_url: str = env_camera_url("CAMERA_1_RTSP_URL")
-    camera_2_url: str = env_camera_url("CAMERA_2_RTSP_URL")
+    camera_1_url: str = field(default=env_camera_url("CAMERA_1_RTSP_URL"), repr=False)
+    camera_2_url: str = field(default=env_camera_url("CAMERA_2_RTSP_URL"), repr=False)
     local_yolo_model: Path = BASE_DIR / os.getenv("LOCAL_YOLO_MODEL", "models/trained_local.pt")
     coco_yolo_model: Path = BASE_DIR / os.getenv("COCO_YOLO_MODEL", "models/yolov8n.pt")
     confidence: float = env_float("DETECTION_CONFIDENCE", 0.35)
@@ -141,6 +190,13 @@ class Settings:
     reconnect_seconds: float = env_float("CAMERA_RECONNECT_SECONDS", 3.0)
 
     def __post_init__(self):
+        if self.rtsp_transport not in {"tcp", "udp"}:
+            raise ValueError("RTSP_TRANSPORT must be tcp or udp")
+        for name in ("camera_stale_seconds", "camera_repeat_seconds", "reconnect_seconds", "reconnect_max_seconds"):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        if self.reconnect_max_seconds < self.reconnect_seconds or self.rtsp_timeout_ms <= 0:
+            raise ValueError("Camera reconnect maximum must cover initial delay; RTSP timeout must be positive")
         if self.openvino_request_mode not in {"shared", "fair", "independent", "async"}:
             raise ValueError("OPENVINO_REQUEST_MODE must be shared, fair, independent, or async")
         if self.openvino_performance_hint not in {"LATENCY", "THROUGHPUT"}:
@@ -151,6 +207,6 @@ class Settings:
 settings = Settings()
 
 def mask_rtsp_url(url: str) -> str:
-    if "@" not in url or "://" not in url: return "configured camera source" if url else "unconfigured camera source"
-    scheme, remainder = url.split("://", 1)
-    return f"{scheme}://***:***@{remainder.split('@', 1)[1]}"
+    # Do not echo any URL components: malformed userinfo/query tokens may also
+    # contain secrets. Camera/node identity is provided separately by callers.
+    return "configured camera source" if url else "unconfigured camera source"

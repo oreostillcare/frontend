@@ -84,6 +84,13 @@ class TimerBatchManager(TrafficTransactionManager):
                 self._active["status"] = "anomaly"
                 self._active["anomaly"] = reason
 
+    def invalidate_camera(self, camera_id, reason):
+        """Latch stream discontinuities until supervised state/clearance reset."""
+        with self._lock:
+            self._queue_views.pop(camera_id, None)
+            self._blocked_reason = f"Camera {camera_id} observation fault; verify road clearance and reset"
+            self.fault(self._blocked_reason)
+
     def advance(self):
         with self._lock:
             transaction = self._active

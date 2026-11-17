@@ -432,3 +432,55 @@ def test_process_merges_local_and_coco_and_suppresses_overlap(monkeypatch):
     assert rendered is frame
     assert [item["class"] for item in detections] == ["tricycle", "bus"]
     instance.track_state.update.assert_called_once_with(detections)
+
+
+def test_reset_tracking_state_clears_camera_state_and_predictor_tracker():
+    detector = bare_detector()
+    from modules.live_monitoring.vehicle_tracking import TrackState
+    from modules.traffic_decision.scoring import IncomingVehicleLedger
+
+    tracker = Mock()
+    predictor = SimpleNamespace(trackers=[tracker])
+    session_model = SimpleNamespace(predictor=predictor)
+    detector.track_state = TrackState((0, 1, 10, 1), True)
+    detector.track_state.passed = 3
+    detector.incoming_ledger = IncomingVehicleLedger()
+    detector.local_session = ModelSession(session_model, Mock(), [], None)
+    detector.coco_session = None
+    detector.class_history[9].append("car")
+    detector.locked_classes[9] = "car"
+    detector.class_last_seen[9] = 1
+    detector.frame_index = 5
+
+    detector.reset_tracking_state()
+
+    assert detector.track_state.passed == 0
+    assert detector.frame_index == 0
+    assert not detector.class_history and not detector.locked_classes and not detector.class_last_seen
+    tracker.reset.assert_called_once_with()
+    assert session_model.predictor is predictor
+
+
+def test_bytetracker_construction_and_reset_preserve_global_id_counter(monkeypatch):
+    import ultralytics.trackers.track as tracker_module
+    from ultralytics.trackers.basetrack import BaseTrack
+    from modules.live_monitoring.vehicle_detector import install_monotonic_byte_tracker
+
+    install_monotonic_byte_tracker()
+    tracker_class = tracker_module.TRACKER_MAP["bytetrack"]
+    previous_count = BaseTrack._count
+    try:
+        BaseTrack._count = 42
+        first = tracker_class(args=SimpleNamespace(track_buffer=30))
+        second = tracker_class(args=SimpleNamespace(track_buffer=30))
+        assert BaseTrack._count == 42
+        first.tracked_stracks.append(object())
+        first.reset()
+        assert first.tracked_stracks == []
+        assert first.frame_id == 0
+        assert BaseTrack._count == 42
+        BaseTrack.next_id()
+        assert BaseTrack._count == 43
+        assert second.tracked_stracks == []
+    finally:
+        BaseTrack._count = previous_count

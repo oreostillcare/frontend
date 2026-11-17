@@ -37,6 +37,14 @@ class StopAfterRetry:
         return True
 
 
+def test_exception_sanitizer_hides_other_camera_and_malformed_userinfo():
+    message = camera_module.sanitize_error(
+        RuntimeError("decoder rtsp://other:private/password@camera.test/stream1?token=secret"),
+        "rtsp://own:account@another.test/stream1",
+    )
+    assert message == "decoder configured camera source"
+
+
 @pytest.fixture
 def worker(monkeypatch):
     monkeypatch.setattr(camera_module, "Detector", FakeDetector)
@@ -370,7 +378,7 @@ def test_capture_loop_publishes_webcam_frame_and_marks_camera_online(monkeypatch
 
         def is_set(self):
             self.checks += 1
-            return self.checks >= 3
+            return self.checks >= 5
 
         def wait(self, _timeout):
             return True
@@ -406,6 +414,9 @@ def test_offline_telemetry_hides_stale_detection_values(worker):
         "id": 1,
         "configured": True,
         "online": False,
+        "captureError": None,
+        "observationFresh": False,
+        "reconnectAttempts": 0,
         "testMirror": False,
         "captureFps": None,
         "video": {
@@ -675,7 +686,7 @@ def test_capture_overwrite_diagnostics_keep_one_frame_buffer(monkeypatch, worker
 
         def is_set(self):
             self.checks += 1
-            return self.checks >= 5
+            return self.checks >= 9
 
         def wait(self, _timeout):
             return True
@@ -913,4 +924,195 @@ def test_stopped_processing_worker_never_acquires_or_processes_a_frame(worker):
     worker._processing_loop()
     worker._raw_frame.copy.assert_not_called()
     worker.detector.process.assert_not_called()
+
+
+
+@pytest.mark.parametrize("camera_id", [1, 2])
+def test_rtsp_read_failure_reconnects_with_independent_connection_generation(monkeypatch, worker, camera_id):
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    first, second = Mock(), Mock()
+    first.isOpened.return_value = True
+    second.isOpened.return_value = True
+    first.read.side_effect = [(True, frame), (False, None)]
+
+    second.read.return_value = (True, frame)
+    worker.camera_id = camera_id
+    worker.source = f"rtsp://u:secret@camera-{camera_id}/stream1"
+
+    class StopAfterReconnectFrame:
+        def is_set(self):
+            return worker._raw_version >= 2
+
+        def wait(self, _timeout):
+            return False
+
+    worker._stop = StopAfterReconnectFrame()
+    monkeypatch.setattr(worker, "_open_capture", Mock(side_effect=[first, second]))
+    monkeypatch.setattr(camera_module.time, "perf_counter", lambda: 1.0)
+
+    worker._capture_loop()
+
+    assert worker.online is True
+    assert worker._raw_frame is frame
+    assert worker._capture_generation == 3
+    assert worker.error is None
+    assert worker._open_capture.call_count == 2
+
+
+def test_rtsp_repeated_frame_fault_is_sanitized_and_releases_capture(monkeypatch, worker):
+    frame = np.zeros((32, 32, 3), dtype=np.uint8)
+    capture = Mock()
+    capture.isOpened.return_value = True
+    capture.read.side_effect = [(True, frame), (True, frame)]
+    worker.source = "rtsp://username:private-password@camera.local/stream1"
+    worker.config.camera_repeat_seconds = 0.1
+    worker._stop = StopAfterRetry()
+    times = iter((1.0, 1.0, 1.2, 1.2))
+    monkeypatch.setattr(worker, "_open_capture", lambda: capture)
+    monkeypatch.setattr(camera_module.time, "perf_counter", lambda: next(times))
+
+    worker._capture_loop()
+
+    assert worker.online is False
+    assert worker.error == "RTSP stream stopped changing; reconnecting"
+    assert "private-password" not in worker.error
+    assert worker._raw_frame is None
+    capture.release.assert_called_once()
+
+
+def test_rtsp_reconnect_delay_uses_bounded_exponential_backoff(monkeypatch, worker):
+    capture = Mock()
+    capture.isOpened.return_value = False
+    waits = []
+
+    class StopAfterThreeRetries:
+        retries = 0
+
+        def is_set(self):
+            return self.retries >= 3
+
+        def wait(self, delay):
+            waits.append(delay)
+            self.retries += 1
+            return False
+
+    worker.source = "rtsp://camera.local/stream1"
+    worker.config.reconnect_seconds = 0.25
+    worker.config.reconnect_max_seconds = 0.6
+    worker._stop = StopAfterThreeRetries()
+    monkeypatch.setattr(worker, "_open_capture", lambda: capture)
+
+    worker._capture_loop()
+
+    assert waits == [0.25, 0.5, 0.6]
+    assert worker.reconnect_attempts == 3
+
+
+def test_inflight_result_after_disconnect_is_discarded(worker, monkeypatch):
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    worker.online = True
+    worker._capture_generation = 1
+    worker._raw_frame = frame
+    worker._raw_version = 1
+    worker._raw_captured_at = time.perf_counter()
+    worker.detection_handler = Mock()
+    worker._stop = StopAfterRetry()
+    worker.detector.reset_tracking_state = Mock()
+    def disconnect_during_inference(image):
+        worker._mark_offline("disconnected")
+        worker._stop.set()
+        return image, []
+
+    worker.detector.process = Mock(side_effect=disconnect_during_inference)
+    worker._processing_loop()
+    worker.detection_handler.assert_not_called()
+    assert worker._latest_result_at is None
+
+
+def test_observation_freshness_requires_current_recent_inference(worker, monkeypatch):
+    now = 20.0
+    monkeypatch.setattr(camera_module.time, "perf_counter", lambda: now)
+    worker.online = True
+    worker._capture_generation = 4
+    worker._result_generation = 4
+    worker._latest_result_at = 17.0
+    worker._latest_result_capture_at = 17.0
+    worker._latest_capture_at = 17.0
+    worker.processing_health = "running"
+    assert worker.is_observation_fresh() is True
+    worker._result_generation = 3
+    assert worker.is_observation_fresh() is False
+    worker._result_generation = 4
+    worker._latest_result_at = 10.0
+    worker._latest_result_capture_at = 10.0
+    assert worker.is_observation_fresh() is False
+    worker._latest_result_at = 17.0
+    worker._latest_result_capture_at = 17.0
+    worker._reconnect_requested.set()
+    assert worker.is_observation_fresh() is False
+    worker._reconnect_requested.clear()
+    worker.processing_health = "failed"
+    assert worker.is_observation_fresh() is False
+
+
+
+def test_stale_inference_result_invalidates_camera_before_transaction_commit(monkeypatch, worker):
+    clock = [1.0]
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    worker.source = "rtsp://camera.local/stream1"
+    worker.config.camera_stale_seconds = 0.5
+    worker.online = True
+    worker._capture_generation = 2
+    worker._raw_frame = frame
+    worker._raw_version = 1
+    worker._raw_captured_at = 1.0
+    worker._stop = threading.Event()
+    worker.discontinuity_handler = Mock()
+    worker.detection_handler = Mock()
+
+    def slow_process(image):
+        clock[0] = 2.0
+        worker._stop.set()
+        return image, []
+
+    worker.detector.reset_tracking_state = Mock()
+    worker.detector.process = Mock(side_effect=slow_process)
+    monkeypatch.setattr(camera_module.time, "perf_counter", lambda: clock[0])
+    worker._processing_loop()
+
+    worker.detection_handler.assert_not_called()
+    worker.discontinuity_handler.assert_called_once_with(1, "RTSP inference result became stale; reconnecting")
+    assert worker.online is False
+    assert worker._reconnect_requested.is_set()
+    assert worker._latest_result_at is None
+
+
+def test_capture_does_not_publish_frame_after_fault_wins_connection_lock(monkeypatch, worker):
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    capture = Mock()
+    capture.isOpened.return_value = True
+    capture.read.return_value = (True, frame)
+    worker.source = "rtsp://camera.local/stream1"
+    worker.online = True
+    worker._stop = StopAfterRetry()
+    callback_lock_states = []
+
+    def fault_during_signature(_frame):
+        worker._mark_offline("RTSP stream stopped changing; reconnecting")
+        return 123
+
+    def record_fault(_camera_id, _reason):
+        callback_lock_states.append(worker._connection_lock._is_owned())
+
+    worker.discontinuity_handler = record_fault
+    monkeypatch.setattr(worker, "_open_capture", lambda: capture)
+    monkeypatch.setattr(worker, "_frame_signature", fault_during_signature)
+    monkeypatch.setattr(camera_module.time, "perf_counter", lambda: 1.0)
+
+    worker._capture_loop()
+
+    assert worker.online is False
+    assert worker._raw_frame is None
+    assert worker._raw_version == 0
+    assert callback_lock_states == [True]
 

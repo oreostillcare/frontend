@@ -115,3 +115,20 @@ def test_simultaneous_incoming_tracks_receive_different_global_ids(monkeypatch):
 
     assert first["vehicleId"] == "VEH-0001"
     assert second["vehicleId"] == "VEH-0002"
+
+
+def test_forget_camera_removes_only_that_camera_local_tracking_state(monkeypatch):
+    vehicles = registry(monkeypatch)
+    first = detection(7)
+    second = detection(8)
+    vehicles.assign(1, [first], "red-car", now=1.0)
+    vehicles.assign(2, [second], "blue-car", now=1.0)
+    first_gid = first["vehicleId"]
+    second_gid = second["vehicleId"]
+
+    vehicles.forget_camera(1)
+
+    assert (1, 7) not in vehicles._bindings
+    assert (2, 8) in vehicles._bindings
+    assert (first_gid, 1) not in vehicles._observations
+    assert (second_gid, 2) in vehicles._observations

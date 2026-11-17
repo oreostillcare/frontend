@@ -126,6 +126,23 @@ class GlobalVehicleRegistry:
         self._departures: dict[str, DepartureCandidate] = {}
         self._confirmed_handoffs: set[tuple[str, int]] = set()
 
+    def forget_camera(self, camera_id: int) -> None:
+        """Forget only this camera's local track bindings after its stream resets."""
+        with self._lock:
+            self._bindings = {
+                key: value for key, value in self._bindings.items() if key[0] != camera_id
+            }
+            self._observations = {
+                key: value for key, value in self._observations.items() if key[1] != camera_id
+            }
+            self._departures = {
+                vehicle_id: value for vehicle_id, value in self._departures.items()
+                if value.origin_camera_id != camera_id
+            }
+            self._confirmed_handoffs = {
+                pair for pair in self._confirmed_handoffs if pair[1] != camera_id
+            }
+
     def reset(self) -> None:
         """Clear all session identities so the next vehicle starts a fresh test."""
         with self._lock:

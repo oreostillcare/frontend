@@ -231,6 +231,7 @@ class ModelPool:
         requested = {"local": load_local, "coco": load_coco}
         try:
             from ultralytics import YOLO
+            install_monotonic_byte_tracker()
         except Exception as exc:
             for name, enabled in requested.items():
                 if enabled:
@@ -320,6 +321,27 @@ class ModelPool:
         }
 
 
+def install_monotonic_byte_tracker() -> None:
+    """Keep Ultralytics tracker construction/reset from rewinding IDs process-wide."""
+    try:
+        from ultralytics.trackers.track import TRACKER_MAP
+    except (ImportError, AttributeError):
+        return
+    tracker_class = TRACKER_MAP.get("bytetrack")
+    if tracker_class is None or getattr(tracker_class, "_smartroad_monotonic_ids", False):
+        return
+
+    class MonotonicByteTracker(tracker_class):
+        _smartroad_monotonic_ids = True
+
+        @staticmethod
+        def reset_id() -> None:
+            # Ultralytics uses a class-global counter shared by every camera.
+            return None
+
+    TRACKER_MAP["bytetrack"] = MonotonicByteTracker
+
+
 def box_iou(first: list[int], second: list[int]) -> float:
     left = max(first[0], second[0])
     top = max(first[1], second[1])
@@ -375,6 +397,24 @@ class Detector:
             active_weights.append(self.model_pool.runtime_path("coco").name)
         self.weights = " + ".join(active_weights) if active_weights else None
         self.load_error = "; ".join(self.model_pool.errors.values()) or None
+
+    def reset_tracking_state(self) -> None:
+        """Drop camera-local tracker state after a stream discontinuity."""
+        self.track_state = TrackState(self.track_state.line, self.track_state.enabled)
+        self.incoming_ledger = IncomingVehicleLedger()
+        self.class_history.clear()
+        self.locked_classes.clear()
+        self.class_last_seen.clear()
+        self.frame_index = 0
+        for session in (self.local_session, self.coco_session):
+            if session is None:
+                continue
+            predictor = getattr(session.model, "predictor", None) or session.predictor
+            trackers = getattr(predictor, "trackers", ()) if predictor is not None else ()
+            for tracker in trackers:
+                reset = getattr(tracker, "reset", None)
+                if reset:
+                    reset()
 
     @property
     def model_online(self) -> bool:

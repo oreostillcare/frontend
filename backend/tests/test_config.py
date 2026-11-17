@@ -58,11 +58,46 @@ def test_camera_stream_quality_rewriting(monkeypatch, url, quality, expected):
     [
         ("", "unconfigured camera source"),
         ("camera-device-0", "configured camera source"),
-        ("rtsp://admin:secret@192.0.2.1:554/stream1", "rtsp://***:***@192.0.2.1:554/stream1"),
+        ("rtsp://admin:secret@192.0.2.1:554/stream1", "configured camera source"),
     ],
 )
 def test_rtsp_url_masking(url, expected):
     assert mask_rtsp_url(url) == expected
+
+
+def test_camera_credentials_are_encoded_and_profiles_independent(monkeypatch):
+    monkeypatch.setenv("CAMERA_1_RTSP_URL", "rtsp://camera-a.test:554/stream1")
+    monkeypatch.setenv("CAMERA_1_USERNAME", "user:name@")
+    monkeypatch.setenv("CAMERA_1_PASSWORD", "p@ss:/?#%")
+    monkeypatch.setenv("CAMERA_STREAM_QUALITY", "stream1")
+    monkeypatch.setenv("CAMERA_1_STREAM_QUALITY", "stream2")
+    monkeypatch.setenv("CAMERA_2_RTSP_URL", "rtsp://other:p%40ss@camera-b.test/stream1")
+    assert env_camera_url("CAMERA_1_RTSP_URL") == "rtsp://user%3Aname%40:p%40ss%3A%2F%3F%23%25@camera-a.test:554/stream2"
+    assert env_camera_url("CAMERA_2_RTSP_URL") == "rtsp://other:p%40ss@camera-b.test/stream1"
+
+
+def test_malformed_camera_config_errors_do_not_echo_secrets(monkeypatch):
+    monkeypatch.setenv("CAMERA_1_RTSP_URL", "rtsp://user:private-secret@host:bad/stream1")
+    with pytest.raises(ValueError) as caught:
+        env_camera_url("CAMERA_1_RTSP_URL")
+    assert "private-secret" not in str(caught.value)
+
+
+def test_camera_settings_validate_bounds_and_hide_urls():
+    with pytest.raises(ValueError, match="RTSP_TRANSPORT"):
+        Settings(rtsp_transport="invalid")
+    with pytest.raises(ValueError, match="finite and positive"):
+        Settings(camera_stale_seconds=float("nan"))
+    assert "private-secret" not in repr(Settings(camera_1_url="rtsp://u:private-secret@host/stream1"))
+
+
+def test_transport_options_are_set_once_without_credentials(monkeypatch):
+    config.configure_rtsp_capture(Settings(rtsp_transport="udp"))
+    import os
+    assert os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] == "rtsp_transport;udp"
+    assert os.environ["OPENCV_FFMPEG_LOGLEVEL"] == "-8"
+    # Restore the process default for subsequent capture tests.
+    config.configure_rtsp_capture(Settings(rtsp_transport="tcp"))
 
 
 def test_openvino_runtime_settings_defaults_and_normalizes_environment(monkeypatch):

@@ -11,7 +11,7 @@ from flask import Flask, Response, jsonify, redirect, render_template, request, 
 from flask_cors import CORS
 
 from modules.live_monitoring.camera_capture import CameraWorker
-from config import settings
+from config import settings, camera_input_identity
 from modules.live_monitoring.vehicle_detector import ModelPool
 from modules.traffic_decision.traffic_control import Esp32SignalController, PointComparisonController
 from modules.firebase_persistence.traffic_transaction_firestore import FirestoreTransactionWriter
@@ -69,7 +69,7 @@ camera_sources: dict[int, int | str] = {
     1: configured_source(1, settings.web_camera_index),
     2: -1 if display_mirror else configured_source(2, getattr(settings, "logi_c270_camera_index", settings.dv20_camera_index)),
 }
-if camera_sources[1] not in (None, "", -1) and camera_sources[1] == camera_sources[2]:
+if camera_sources[1] not in (None, "", -1) and camera_input_identity(camera_sources[1]) == camera_input_identity(camera_sources[2]):
     raise ValueError("Two nodes must not share a physical input; use display-only mirror mode")
 
 model_pool = ModelPool(settings)
@@ -107,6 +107,7 @@ def create_camera_worker(camera_id: int, source: int | str) -> CameraWorker:
         vehicle_registry=vehicle_registry,
         detection_handler=transaction_manager.observe_detections,
         transaction_state_provider=transaction_manager.snapshot,
+        discontinuity_handler=transaction_manager.invalidate_camera,
     )
     # Recheck discovery on reconnect; an index may now point at another model.
     worker.usb_device_name = next(
@@ -166,7 +167,8 @@ def read_node_points() -> dict:
             "points": points,
             "vehicles": vehicles,
             "behindGreenVehicles": queue["behindGreenVehicles"],
-            "ready": bool(worker.online and worker.detector.model_online and queue["fresh"]),
+            "ready": bool(worker.online and worker.detector.model_online and queue["fresh"]
+                          and getattr(worker, "is_observation_fresh", lambda: True)()),
         }
     return node_scores
 
@@ -458,7 +460,8 @@ def select_camera_source(camera_id: int):
 
         replacement_sources = {camera_id: source_index}
         for other_id, other_worker in workers.items():
-            if other_id != camera_id and other_worker.source == source_index and source_index != -1:
+            if (other_id != camera_id and source_index != -1
+                    and camera_input_identity(other_worker.source) == camera_input_identity(source_index)):
                 return jsonify({"error": "Source already assigned to the other node; disable it first"}), 409
 
         replacement_workers = {
@@ -466,6 +469,7 @@ def select_camera_source(camera_id: int):
             for item, source in replacement_sources.items()
         }
         for item in replacement_workers:
+            transaction_manager.invalidate_camera(item, "Camera source changed")
             workers[item].stop()
         for item in replacement_workers:
             wait_until_stopped = getattr(workers[item], "wait_until_stopped", None)
