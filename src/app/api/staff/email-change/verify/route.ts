@@ -13,6 +13,9 @@ async function readRequest(token: string) {
   const data = snapshot.data();
   if (!snapshot.exists || !data) throw new ApiError("This email verification link is invalid.", 404, "invalid-token");
   if (data.status === "completed") return { reference, data };
+  if (data.status === "expired") {
+    throw new ApiError("This email verification link has expired.", 410, "expired-token");
+  }
   if (data.status !== "pending") {
     throw new ApiError("This email verification link has already been used or cancelled.", 410, "used-token");
   }

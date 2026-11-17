@@ -19,6 +19,11 @@ const INVITED_PASSWORD = "invited-emulator-password";
 const CHANGED_EMAIL = "firebase-admin-updated@example.test";
 
 async function mockDetectionBackend(page: Page) {
+  await page
+    .context()
+    .route(/https?:\/\/[^/]*(?:firebaseio\.com|firebaseapp\.com|googleapis\.com)\/.*/, (route) =>
+      route.abort("blockedbyclient"),
+    );
   await page.route("**/detection/api/system/status", async (route) => {
     await route.fulfill({
       json: {
@@ -41,7 +46,16 @@ async function login(page: Page, identifier = ADMIN_USERNAME, password = ADMIN_P
   await page.goto("/login");
   await page.getByLabel("Username or Email").fill(identifier);
   await page.getByLabel("Password", { exact: true }).fill(password);
+  const signIn = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname.endsWith("/accounts:signInWithPassword"),
+  );
   await page.getByRole("button", { name: "Login" }).click();
+  const response = await signIn;
+  expect(["127.0.0.1", "localhost", "[::1]"]).toContain(new URL(response.url()).hostname);
+  expect(response.ok()).toBe(true);
+  await page.waitForURL(/\/dashboard$/);
   await expect(page).toHaveURL(/\/dashboard$/);
 }
 
@@ -73,6 +87,8 @@ async function createInvitation(page: Page) {
   await page.goto("/dashboard/staff");
   await expect(page.getByRole("heading", { name: "Staff Information" })).toBeVisible();
   await page.getByRole("button", { name: "Add staff" }).click();
+  await page.getByLabel("First name", { exact: true }).fill("Invited");
+  await page.getByLabel("Last name", { exact: true }).fill("Operator");
   await page.getByLabel("Username").fill("invited-operator");
   await page.getByLabel("Email address").fill(INVITED_EMAIL);
   const responsePromise = page.waitForResponse(
@@ -170,7 +186,21 @@ test("verifies an invitation link, activates the account, and prevents link reus
   await applyEmailVerificationCode(action.oobCode);
   const invitationUrl = actionContinueUrl(action);
 
+  const verification = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      response.request().method() === "GET" &&
+      url.pathname === "/api/staff/invitations/verify" &&
+      url.searchParams.get("token") === new URL(invitationUrl).searchParams.get("token")
+    );
+  });
   await page.goto(invitationUrl);
+  const verificationResponse = await verification;
+  expect(verificationResponse.ok()).toBe(true);
+  await expect(verificationResponse.json()).resolves.toMatchObject({
+    username: "invited-operator",
+    email: INVITED_EMAIL,
+  });
   await expect(page.getByText("invited-operator", { exact: true })).toBeVisible();
   await page.getByLabel("Password", { exact: true }).fill(INVITED_PASSWORD);
   await page.getByLabel("Confirm password").fill(INVITED_PASSWORD);
@@ -231,9 +261,21 @@ test("verifies an email-change link and moves Firebase login to the new address"
   await expect(signInToAuthEmulator(ADMIN_EMAIL, ADMIN_PASSWORD)).rejects.toThrow();
 });
 
-test("cancels a pending email change and rejects its verification page", async ({ page }) => {
+test("cancels a pending email change and rejects its verification page", async ({ page }, testInfo) => {
   const action = await startEmailChange(page);
 
+  const dialog = page.getByRole("dialog", { name: "Edit staff member" });
+  await expect(dialog).toBeInViewport({ ratio: 1 });
+  await page.getByRole("button", { name: "Cancel verification" }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("staff-dialog-desktop.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator("html").evaluate((element) => {
+    element.classList.add("dark");
+    element.dataset.themeMode = "dark";
+  });
+  await expect(dialog).toBeInViewport({ ratio: 1 });
+  await page.getByRole("button", { name: "Cancel verification" }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("staff-dialog-mobile-dark.png") });
   await page.getByRole("button", { name: "Cancel verification" }).click();
   await expect(page.getByRole("dialog", { name: "Edit staff member" })).not.toBeVisible();
   await page.goto(actionContinueUrl(action));
@@ -246,14 +288,14 @@ test("rejects an email-change link after its verification timeout", async ({ pag
   const action = await startEmailChange(page);
   const verificationToken = new URL(actionContinueUrl(action)).searchParams.get("token");
   expect(verificationToken).toBeTruthy();
-  await page.goto("/verify-email-change");
   await setDocumentTiming("staffEmailChanges", hashToken(verificationToken as string), {
     expiresAt: Date.now() - 1_000,
   });
   await applyEmailVerificationCode(action.oobCode);
 
-  await page.goto(actionContinueUrl(action));
-  await expect(page.getByText("Verification failed", { exact: true })).toBeVisible();
-  await expect(page.getByText(/expired/i)).toBeVisible();
+  const verificationPage = await page.context().newPage();
+  await verificationPage.goto(actionContinueUrl(action));
+  await expect(verificationPage.getByText("Verification failed", { exact: true })).toBeVisible();
+  await expect(verificationPage.getByText(/expired/i)).toBeVisible();
   await expect(signInToAuthEmulator(ADMIN_EMAIL, ADMIN_PASSWORD)).resolves.toMatchObject({ email: ADMIN_EMAIL });
 });

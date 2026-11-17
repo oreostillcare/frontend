@@ -12,18 +12,35 @@ export const ADMIN_PASSWORD = "firebase-emulator-password";
 
 let appSequence = 0;
 
+function localEmulatorHost(value: string) {
+  const url = new URL(`http://${value}`);
+  if (
+    !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
+    !url.port ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("Firebase tests require a loopback emulator host and explicit port.");
+  }
+  return value;
+}
+
 function authHost() {
-  return process.env.FIREBASE_AUTH_EMULATOR_HOST || "127.0.0.1:9099";
+  return localEmulatorHost(process.env.FIREBASE_AUTH_EMULATOR_HOST || "127.0.0.1:9099");
 }
 
 function firestoreHost() {
-  return process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8080";
+  return localEmulatorHost(process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8080");
 }
 
 function configureEmulatorEnvironment() {
   process.env.FIREBASE_AUTH_EMULATOR_HOST = authHost();
   process.env.FIRESTORE_EMULATOR_HOST = firestoreHost();
   process.env.GCLOUD_PROJECT = PROJECT_ID;
+  process.env.FIREBASE_ADMIN_PROJECT_ID = PROJECT_ID;
 }
 
 async function clearEmulator(url: string) {
@@ -59,6 +76,8 @@ export async function resetFirebaseEmulators() {
       uid: ADMIN_USER_ID,
       authUid: ADMIN_USER_ID,
       username: ADMIN_USERNAME,
+      firstName: "Firebase",
+      lastName: "Emulator Admin",
       email: ADMIN_EMAIL,
       normalizedEmail: ADMIN_EMAIL,
       role: "Administrator",

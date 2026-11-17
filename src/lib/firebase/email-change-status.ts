@@ -42,6 +42,9 @@ export async function reconcileEmailChange(requestId: string, expectedStaffId?: 
   if (requestData.status === "processing") {
     return { status: "processing", newEmail: String(requestData.newEmail) };
   }
+  if (requestData.status === "expired") {
+    throw new ApiError("This email verification request has expired.", 410, "expired-email-change");
+  }
   if (requestData.status !== "pending") {
     throw new ApiError("This email verification request was cancelled or replaced.", 410, "inactive-email-change");
   }

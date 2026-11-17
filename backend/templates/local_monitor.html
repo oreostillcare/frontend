@@ -136,7 +136,7 @@
     <script>
       const vehicleClasses = ["car", "motorcycle", "truck", "bus", "bicycle", "ebike", "jeepney", "tricycle"];
       const testResetToken = {{ test_reset_token | tojson }};
-      const value = (item) => item === null || item === undefined ? "--" : item;
+      const value = (item) => item ?? "--";
 
       function renderCamera(camera) {
         const card = document.getElementById(`camera-${camera.id}`);

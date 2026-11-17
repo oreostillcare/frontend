@@ -135,6 +135,18 @@ describe("reconcileEmailChange", () => {
     });
   });
 
+  it("preserves the expiry error when a previous status poll already expired the request", async () => {
+    const harness = createHarness({ request: pendingRequest({ status: "expired" }) });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await expect(reconcileEmailChange("request-id")).rejects.toMatchObject({
+        code: "expired-email-change",
+        status: 410,
+      });
+    }
+    expect(harness.requestRef.update).not.toHaveBeenCalled();
+    expect(firebaseAdmin.adminAuth.updateUser).not.toHaveBeenCalled();
+  });
+
   it("rejects cancelled or replaced requests", async () => {
     createHarness({ request: pendingRequest({ status: "cancelled" }) });
 

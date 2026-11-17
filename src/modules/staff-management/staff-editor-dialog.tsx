@@ -158,7 +158,10 @@ export function StaffDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-md" showCloseButton={!isSaving && !isCancellingVerification}>
+      <DialogContent
+        className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md"
+        showCloseButton={!isSaving && !isCancellingVerification}
+      >
         <form
           onSubmit={handleSubmit}
           aria-busy={isSaving || isCancellingVerification || verificationState === "pending"}
