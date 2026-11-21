@@ -122,6 +122,7 @@ export async function reconcileEmailChange(requestId: string, expectedStaffId?: 
     await recordStaffActivityFields({
       actorEmail: String(staff.email || newEmail),
       actorName: targetName,
+      actorUsername: String(staff.username || targetName),
       actorRole: staff.role === "Administrator" ? "Administrator" : "Operator",
       actorUid: targetUid,
       activity: "Verified email",

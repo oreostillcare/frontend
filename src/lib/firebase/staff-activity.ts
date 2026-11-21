@@ -10,6 +10,7 @@ export type StaffActivityKind = "login" | "logout" | "action";
 export type StaffActivityFields = {
   actorEmail: string;
   actorName: string;
+  actorUsername?: string;
   actorRole: AuthenticatedStaff["role"];
   actorUid: string;
   activity: string;
@@ -21,6 +22,7 @@ export type StaffActivityFields = {
 async function writeStaffActivity({
   actorEmail,
   actorName,
+  actorUsername,
   actorRole,
   actorUid,
   activity,
@@ -32,6 +34,7 @@ async function writeStaffActivity({
   await adminDb.collection("staffActivity").add({
     actorEmail,
     actorName,
+    ...(actorUsername ? { actorUsername } : {}),
     actorRole,
     activity,
     name: name ? name : actorName,
@@ -60,6 +63,7 @@ export function recordStaffActivity({
   return writeStaffActivity({
     actorEmail: actor.email,
     actorName: actor.name,
+    actorUsername: actor.username,
     actorRole: actor.role,
     actorUid: actor.token.uid,
     activity,

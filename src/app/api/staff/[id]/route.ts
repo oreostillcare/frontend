@@ -36,6 +36,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const targetName = formatStaffDisplayName(currentStaff ?? {});
 
     if (input.action === "update") {
+      const previousStaff = currentStaff ?? {};
       currentStaff = await updateStaffProfile(staffDocument.id, {
         firstName: input.firstName,
         middleInitial: input.middleInitial.toUpperCase(),
@@ -53,24 +54,25 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       });
       const editedFields = [];
       if (
-        input.firstName !== String(currentStaff?.firstName || "") ||
+        input.firstName !== String(previousStaff.firstName || "") ||
         input.middleInitial.toUpperCase() !==
-          String(currentStaff?.middleInitial || currentStaff?.middleName || "").toUpperCase() ||
-        input.lastName !== String(currentStaff?.lastName || "")
+          String(previousStaff.middleInitial || previousStaff.middleName || "").toUpperCase() ||
+        input.lastName !== String(previousStaff.lastName || "")
       ) {
         editedFields.push("name");
       }
-      if (input.username !== currentStaff?.username) editedFields.push("username");
-      if (input.email && input.email.toLowerCase() !== String(currentStaff?.email || "").toLowerCase()) {
+      if (input.username !== previousStaff.username) editedFields.push("username");
+      if (input.email && input.email.toLowerCase() !== String(previousStaff.email || "").toLowerCase()) {
         editedFields.push("email");
       }
-      const activityParts = editedFields.length > 0 ? [`Edited ${editedFields.join(", ")}`] : [];
-      if (input.role !== currentStaff?.role) activityParts.push(`Changed role to ${input.role}`);
+      const activityTarget = updatedName || targetName;
+      const activityParts = editedFields.map((field) => `Edited ${activityTarget}'s ${field}`);
+      if (input.role !== previousStaff.role) activityParts.push(`Changed ${activityTarget}'s role to ${input.role}`);
       if (activityParts.length > 0) {
         await recordStaffActivity({
           actor: administrator,
           activity: activityParts.join("; "),
-          name: updatedName,
+          name: activityTarget,
         }).catch(() => undefined);
       }
       return Response.json({ message: "Staff profile updated." });

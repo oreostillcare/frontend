@@ -12,6 +12,7 @@ import {
   type StaffRole,
   subscribeToStaffProfile,
 } from "@/lib/firebase/staff-access";
+import { recordStaffActivityEvent } from "@/lib/firebase/staff-activity-client";
 
 interface AuthState {
   user: User | null;
@@ -61,6 +62,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
     });
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    let activityRecorded = false;
+    const recordBrowserExit = () => {
+      // shortcut: browsers do not expose a close-only event; pagehide also covers refresh/navigation.
+      if (activityRecorded) return;
+      activityRecorded = true;
+      void recordStaffActivityEvent(user, "logout");
+    };
+
+    window.addEventListener("pagehide", recordBrowserExit);
+    return () => window.removeEventListener("pagehide", recordBrowserExit);
+  }, [user]);
 
   useEffect(() => {
     if (loading) {

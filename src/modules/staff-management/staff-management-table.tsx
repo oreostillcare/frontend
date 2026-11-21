@@ -248,7 +248,7 @@ export function StaffTable() {
     };
 
     void reconcileCredentialUpdates();
-    const interval = window.setInterval(() => void reconcileCredentialUpdates(), 3000);
+    const interval = window.setInterval(() => void reconcileCredentialUpdates(), 30_000);
     return () => {
       window.clearInterval(interval);
     };

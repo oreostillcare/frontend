@@ -253,4 +253,14 @@ describe("staff Auth UID and API errors", () => {
     expect(response.status).toBe(status);
     await expect(response.json()).resolves.toMatchObject({ code });
   });
+
+  it("maps Firestore quota exhaustion to a retryable service error", async () => {
+    const response = errorResponse({ code: "RESOURCE_EXHAUSTED", message: "8 RESOURCE_EXHAUSTED: Quota exceeded." });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      code: "firestore-quota-exceeded",
+      error: "Firebase is temporarily out of Firestore quota. Wait for the quota to reset or increase the project quota, then try again.",
+    });
+  });
 });

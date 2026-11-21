@@ -13,6 +13,7 @@ export interface AuthenticatedStaff {
   documentId: string;
   role: StaffRole;
   email: string;
+  username: string;
   name: string;
 }
 
@@ -109,6 +110,7 @@ export async function authenticateStaff(request: Request): Promise<Authenticated
     documentId: document.id,
     role,
     email: String(data.email || email || "").toLowerCase(),
+    username: typeof data.username === "string" && data.username.trim() ? data.username.trim() : formatStaffDisplayName(data),
     name: formatStaffDisplayName(data),
   };
 }
@@ -185,7 +187,7 @@ export function errorResponse(error: unknown) {
     return Response.json({ error: error.message, code: error.code }, { status: error.status });
   }
 
-  const code = (error as { code?: string }).code;
+  const code = (error as { code?: string | number }).code;
   if (code === "auth/email-already-exists" || code === "auth/email-already-in-use") {
     return Response.json(
       { error: "A Firebase Authentication account already uses this email address.", code },
@@ -200,6 +202,20 @@ export function errorResponse(error: unknown) {
   }
 
   const message = error instanceof Error ? error.message : "";
+  if (
+    code === "RESOURCE_EXHAUSTED" ||
+    code === 8 ||
+    message.includes("RESOURCE_EXHAUSTED") ||
+    message.toLowerCase().includes("quota exceeded")
+  ) {
+    return Response.json(
+      {
+        error: "Firebase is temporarily out of Firestore quota. Wait for the quota to reset or increase the project quota, then try again.",
+        code: "firestore-quota-exceeded",
+      },
+      { status: 503 },
+    );
+  }
   if (message.includes("Could not load the default credentials")) {
     return Response.json(
       {

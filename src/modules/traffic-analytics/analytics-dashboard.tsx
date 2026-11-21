@@ -4,13 +4,12 @@
 
 import * as React from "react";
 
-import { CalendarDays, Clock3, Database, Gauge, type LucideIcon, RefreshCw, Route, Shapes } from "lucide-react";
+import { CalendarDays, Database, RefreshCw } from "lucide-react";
 
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Popover,
   PopoverContent,
@@ -28,7 +27,6 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   buildClassificationSeries,
   buildHourlyActivitySeries,
-  buildTrafficMetrics,
   buildVolumeSeries,
   filterTrafficEvents,
   formatManilaDate,
@@ -38,11 +36,19 @@ import {
   type TrafficNodeFilter,
   type TrafficRange,
 } from "./analytics-sample-data";
-import { type StaffActivityRecord, subscribeToStaffActivity } from "./staff-activity-data";
+import {
+  buildOperatingHoursSeries,
+  filterStaffActivity,
+  type OperatingHoursStaff,
+  type StaffActivityRecord,
+  type StaffRoleFilter,
+  subscribeToStaffActivity,
+} from "./staff-activity-data";
 import { StaffActivityTable } from "./staff-activity-table";
 import {
   HourlyActivityChart,
   LaneComparisonChart,
+  OperatingHoursChart,
   TrafficVolumeChart,
   VehicleClassificationChart,
 } from "./traffic-analytics-charts";
@@ -54,19 +60,14 @@ const RANGE_LABELS: Record<TrafficRange, string> = {
   "30d": "Last 30 days",
 };
 
-const NODE_FILTER_LABELS: Record<TrafficNodeFilter, string> = {
-  all: "All nodes",
-  "node-a": "Node A",
-  "node-b": "Node B",
-};
-
 type AnalyticsView =
   | "vehicle-count"
   | "classification"
   | "lane-comparison"
   | "hourly-activity"
   | "traffic-logs"
-  | "staff-activity";
+  | "staff-activity"
+  | "operating-hours";
 
 const ANALYTICS_VIEW_LABELS: Record<AnalyticsView, string> = {
   "vehicle-count": "Vehicle Count Over Time",
@@ -75,46 +76,13 @@ const ANALYTICS_VIEW_LABELS: Record<AnalyticsView, string> = {
   "hourly-activity": "Hourly Traffic Activity",
   "traffic-logs": "Traffic Logs",
   "staff-activity": "Staff Activity",
+  "operating-hours": "Operating Hours",
 };
 const ANALYTICS_VIEW_STORAGE_KEY = "smartroad.analytics-view";
-
-const METRIC_SKELETON_KEYS = ["total", "busiest-node", "peak-hour", "top-class"] as const;
-
-function MetricCard({
-  title,
-  value,
-  detail,
-  icon: Icon,
-}: {
-  title: string;
-  value: string;
-  detail: string;
-  icon: LucideIcon;
-}) {
-  return (
-    <Card size="sm">
-      <CardHeader>
-        <CardDescription>{title}</CardDescription>
-        <CardTitle className="text-2xl tabular-nums tracking-tight">{value}</CardTitle>
-        <CardAction>
-          <Icon className="size-4 text-muted-foreground" aria-hidden="true" />
-        </CardAction>
-      </CardHeader>
-      <CardContent>
-        <p className="text-muted-foreground text-xs">{detail}</p>
-      </CardContent>
-    </Card>
-  );
-}
 
 function AnalyticsSkeleton() {
   return (
     <div className="flex flex-col gap-4" aria-label="Loading traffic analytics" role="status">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {METRIC_SKELETON_KEYS.map((key) => (
-          <Skeleton className="h-28" key={key} />
-        ))}
-      </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
         <Skeleton className="h-96 xl:col-span-8" />
         <Skeleton className="h-96 xl:col-span-4" />
@@ -144,7 +112,9 @@ export function TrafficAnalytics() {
   const [nodeFilter, setNodeFilter] = React.useState<TrafficNodeFilter>("all");
   const [range, setRange] = React.useState<TrafficRange>("30d");
   const [analyticsView, setAnalyticsView] = React.useState<AnalyticsView>("vehicle-count");
+  const [staffRoleFilter, setStaffRoleFilter] = React.useState<StaffRoleFilter>("all");
   const [staffActivities, setStaffActivities] = React.useState<StaffActivityRecord[]>([]);
+  const [operatingHoursStaff, setOperatingHoursStaff] = React.useState<OperatingHoursStaff[]>([]);
   const [staffActivityLoading, setStaffActivityLoading] = React.useState(false);
   const [staffActivityError, setStaffActivityError] = React.useState<string | null>(null);
   const [specificDate, setSpecificDate] = React.useState<Date>();
@@ -178,12 +148,13 @@ export function TrafficAnalytics() {
   }, [refreshKey, specificDate]);
 
   React.useEffect(() => {
-    if (analyticsView !== "staff-activity") return;
+    if (analyticsView !== "staff-activity" && analyticsView !== "operating-hours") return;
     setStaffActivityLoading(true);
     setStaffActivityError(null);
     return subscribeToStaffActivity(
-      (nextActivities) => {
+      (nextActivities, nextStaff) => {
         setStaffActivities(nextActivities);
+        setOperatingHoursStaff(nextStaff);
         setStaffActivityLoading(false);
       },
       (cause) => {
@@ -197,13 +168,20 @@ export function TrafficAnalytics() {
     () => filterTrafficEvents(events, range, nodeFilter, new Date(), specificDate),
     [events, nodeFilter, range, specificDate],
   );
-  const metrics = React.useMemo(() => buildTrafficMetrics(filteredEvents), [filteredEvents]);
   const volumeData = React.useMemo(
     () => buildVolumeSeries(filteredEvents, range, specificDate),
     [filteredEvents, range, specificDate],
   );
   const classificationData = React.useMemo(() => buildClassificationSeries(filteredEvents), [filteredEvents]);
   const hourlyData = React.useMemo(() => buildHourlyActivitySeries(filteredEvents), [filteredEvents]);
+  const filteredStaffActivities = React.useMemo(
+    () => filterStaffActivity(staffActivities, range, new Date(), specificDate),
+    [range, specificDate, staffActivities],
+  );
+  const operatingHoursData = React.useMemo(
+    () => buildOperatingHoursSeries(staffActivities, range, staffRoleFilter, new Date(), specificDate, operatingHoursStaff),
+    [operatingHoursStaff, range, specificDate, staffActivities, staffRoleFilter],
+  );
   const periodLabel = specificDate ? formatManilaDate(specificDate) : RANGE_LABELS[range];
   const isInitialLoading = loading && events.length === 0;
 
@@ -368,39 +346,30 @@ export function TrafficAnalytics() {
         <AnalyticsSkeleton />
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <MetricCard
-              detail={`${periodLabel} · ${NODE_FILTER_LABELS[nodeFilter]}`}
-              icon={Gauge}
-              title="Total vehicles"
-              value={metrics.total.toLocaleString()}
-            />
-            <MetricCard
-              detail={`${metrics.busiestNodeCount.toLocaleString()} recorded detections`}
-              icon={Route}
-              title="Busiest node"
-              value={metrics.busiestNode}
-            />
-            <MetricCard
-              detail={`${metrics.peakHourCount.toLocaleString()} vehicles in that hour`}
-              icon={Clock3}
-              title="Peak traffic hour"
-              value={metrics.peakHour}
-            />
-            <MetricCard
-              detail={`${metrics.topClassCount.toLocaleString()} classifications`}
-              icon={Shapes}
-              title="Most detected"
-              value={metrics.topClass}
-            />
-          </div>
-
           {analyticsView === "vehicle-count" ? (
             <TrafficVolumeChart data={volumeData} periodLabel={periodLabel} range={range} />
           ) : null}
           {analyticsView === "classification" ? <VehicleClassificationChart data={classificationData} /> : null}
           {analyticsView === "lane-comparison" ? <LaneComparisonChart data={volumeData} /> : null}
           {analyticsView === "hourly-activity" ? <HourlyActivityChart data={hourlyData} /> : null}
+          {analyticsView === "operating-hours" ? (
+            <>
+              {staffActivityError ? (
+                <Alert variant="destructive">
+                  <Database />
+                  <AlertTitle>Staff activity is unavailable</AlertTitle>
+                  <AlertDescription>{staffActivityError}</AlertDescription>
+                </Alert>
+              ) : null}
+              <OperatingHoursChart
+                data={operatingHoursData}
+                loading={staffActivityLoading}
+                onRoleFilterChange={setStaffRoleFilter}
+                periodLabel={periodLabel}
+                roleFilter={staffRoleFilter}
+              />
+            </>
+          ) : null}
           {analyticsView === "traffic-logs" ? (
             <TrafficLogsTable
               dataSource={dataSource}
@@ -413,7 +382,7 @@ export function TrafficAnalytics() {
           ) : null}
           {analyticsView === "staff-activity" ? (
             <StaffActivityTable
-              activities={staffActivities}
+              activities={filteredStaffActivities}
               error={staffActivityError}
               loading={staffActivityLoading}
             />

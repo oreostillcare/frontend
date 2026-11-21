@@ -2,10 +2,14 @@
 
 // Visualizes traffic counts, classes, and decision metrics from analytics data.
 
-import { BarChart3 } from "lucide-react";
-import { Area, Bar, BarChart, CartesianGrid, ComposedChart, Line, LineChart, XAxis, YAxis } from "recharts";
+import type { ReactNode } from "react";
+import * as React from "react";
+
+import { BarChart3, ChevronLeft, ChevronRight } from "lucide-react";
+import { Area, Bar, BarChart, CartesianGrid, Cell, ComposedChart, LabelList, Line, LineChart, XAxis, YAxis } from "recharts";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   type ChartConfig,
@@ -16,8 +20,10 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import type { HourlyActivityPoint, TrafficRange, TrafficVolumePoint, VehicleClassPoint } from "./analytics-sample-data";
+import type { OperatingHoursPoint, StaffRoleFilter } from "./staff-activity-data";
 
 const rangeLabels = {
   "24h": "Last 24 hours",
@@ -65,6 +71,13 @@ const vehicleClassificationConfig = {
 const hourlyActivityConfig = {
   total: {
     label: "Vehicles",
+    color: "var(--foreground)",
+  },
+} satisfies ChartConfig;
+
+const operatingHoursConfig = {
+  hours: {
+    label: "Hours online",
     color: "var(--foreground)",
   },
 } satisfies ChartConfig;
@@ -331,6 +344,116 @@ export function HourlyActivityChart({ data }: { data: HourlyActivityPoint[] }) {
           <ChartEmptyState description="Hourly traffic patterns will appear when detections are available." />
         )}
       </CardContent>
+    </Card>
+  );
+}
+
+export function OperatingHoursChart({
+  data,
+  loading,
+  onRoleFilterChange,
+  periodLabel,
+  roleFilter,
+}: {
+  data: OperatingHoursPoint[];
+  loading: boolean;
+  onRoleFilterChange: (value: StaffRoleFilter) => void;
+  periodLabel: string;
+  roleFilter: StaffRoleFilter;
+}) {
+  const [page, setPage] = React.useState(0);
+  const pageCount = Math.max(1, Math.ceil(data.length / 7));
+  const currentPage = Math.min(page, pageCount - 1);
+  const visibleData = data.slice(currentPage * 7, currentPage * 7 + 7);
+  const hasData = data.length > 0;
+  let chartContent: ReactNode;
+
+  if (loading) {
+    chartContent = <ChartEmptyState description="Loading staff activity..." />;
+  } else if (hasData) {
+    chartContent = (
+      <ChartContainer config={operatingHoursConfig} className="aspect-auto h-72 w-full">
+        <BarChart
+          accessibilityLayer
+          data={visibleData}
+          layout="vertical"
+          margin={{ bottom: 0, left: 0, right: 12, top: 0 }}
+        >
+          <CartesianGrid horizontal={false} />
+          <XAxis
+            allowDecimals
+            axisLine={false}
+            tickFormatter={(value) => `${value}h`}
+            tickLine={false}
+            type="number"
+          />
+          <YAxis axisLine={false} dataKey="name" tickLine={false} type="category" width={160} />
+          <ChartTooltip cursor={false} content={<ChartTooltipContent />} />
+          <Bar dataKey="hours" fill="var(--color-hours)" minPointSize={3} maxBarSize={32} radius={5}>
+            {visibleData.map((point) => (
+              <Cell
+                fill={point.role === "Operator" ? "var(--muted-foreground)" : "var(--foreground)"}
+                key={point.username}
+              />
+            ))}
+            <LabelList dataKey="hours" formatter={(value) => `${value}h`} position="right" />
+          </Bar>
+        </BarChart>
+      </ChartContainer>
+    );
+  } else {
+    chartContent = <ChartEmptyState description={`No online staff time recorded for ${periodLabel}.`} />;
+  }
+
+  return (
+    <Card className="h-full">
+      <CardHeader>
+        <CardTitle>Operating Hours</CardTitle>
+        <CardDescription>Staff online time grouped by username for the selected period.</CardDescription>
+        <CardAction>
+          <div className="flex items-center gap-2">
+            <Select
+              value={roleFilter}
+              onValueChange={(value) => {
+                if (value === "all" || value === "Administrator" || value === "Operator") {
+                  setPage(0);
+                  onRoleFilterChange(value);
+                }
+              }}
+            >
+              <SelectTrigger aria-label="Select staff role" className="w-32" size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end" position="popper">
+                <SelectGroup>
+                  <SelectItem value="all">All staff</SelectItem>
+                  <SelectItem value="Administrator">Administrators</SelectItem>
+                  <SelectItem value="Operator">Operators</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Button
+              aria-label="Previous operating hours page"
+              disabled={currentPage === 0}
+              onClick={() => setPage((value) => Math.max(0, value - 1))}
+              size="icon-sm"
+              variant="outline"
+            >
+              <ChevronLeft />
+            </Button>
+            <Button
+              aria-label="Next operating hours page"
+              disabled={currentPage >= pageCount - 1}
+              onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}
+              size="icon-sm"
+              variant="outline"
+            >
+              <ChevronRight />
+            </Button>
+          </div>
+        </CardAction>
+      </CardHeader>
+      <CardContent>{chartContent}</CardContent>
     </Card>
   );
 }
