@@ -11,8 +11,8 @@ import {
   type StaffProfile,
   type StaffRole,
   subscribeToStaffProfile,
-} from "@/lib/firebase/staff-access";
-import { recordStaffActivityEvent } from "@/lib/firebase/staff-activity-client";
+} from "@/shared/firebase/staff-access";
+import { recordStaffActivityEvent } from "@/shared/firebase/staff-activity-client";
 
 interface AuthState {
   user: User | null;

@@ -28,9 +28,9 @@ import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Spinner } from "@/components/ui/spinner";
-import { getFirebaseEmailError, sendNativePasswordReset } from "@/lib/firebase/auth-email";
+import { getFirebaseEmailError, sendNativePasswordReset } from "@/shared/firebase/auth-email";
 import { auth } from "@/lib/firebase/client";
-import { recordStaffActivityEvent } from "@/lib/firebase/staff-activity-client";
+import { recordStaffActivityEvent } from "@/shared/firebase/staff-activity-client";
 
 import {
   clearLoginAttemptRecord,

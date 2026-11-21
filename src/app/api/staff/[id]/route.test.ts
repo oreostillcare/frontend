@@ -9,7 +9,7 @@ const firebaseAdmin = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/firebase/admin", () => firebaseAdmin);
-vi.mock("@/lib/firebase/staff-activity", () => ({ recordStaffActivity: firebaseAdmin.recordStaffActivity }));
+vi.mock("@/shared/firebase/staff-activity", () => ({ recordStaffActivity: firebaseAdmin.recordStaffActivity }));
 
 import { PATCH } from "./route";
 

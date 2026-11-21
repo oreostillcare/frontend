@@ -3,8 +3,8 @@
 import { type CSSProperties, useState } from "react";
 
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
-import { useIsLg } from "@/hooks/use-lg";
-import { useIsMobile } from "@/hooks/use-mobile";
+import { useIsLg } from "@/shared/hooks/use-lg";
+import { useIsMobile } from "@/shared/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 
 import { ChatConversationList } from "./chat-conversation-list";

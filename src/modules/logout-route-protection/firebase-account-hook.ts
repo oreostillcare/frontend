@@ -10,7 +10,7 @@ import { signOut } from "firebase/auth";
 
 import { useAuth } from "@/components/auth-provider";
 import { auth } from "@/lib/firebase/client";
-import { recordStaffActivityEvent } from "@/lib/firebase/staff-activity-client";
+import { recordStaffActivityEvent } from "@/shared/firebase/staff-activity-client";
 
 export function useFirebaseAccount() {
   const { user, configured, staffProfile, staffRole, staffLoading, administratorEmail } = useAuth();

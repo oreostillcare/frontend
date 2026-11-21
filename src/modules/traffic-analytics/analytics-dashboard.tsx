@@ -13,15 +13,11 @@ import { Calendar } from "@/components/ui/calendar";
 import {
   Popover,
   PopoverContent,
-  PopoverDescription,
-  PopoverHeader,
-  PopoverTitle,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 import {
@@ -111,6 +107,7 @@ export function TrafficAnalytics() {
   const [dataSource, setDataSource] = React.useState<TrafficDataSource>("sample");
   const [nodeFilter, setNodeFilter] = React.useState<TrafficNodeFilter>("all");
   const [range, setRange] = React.useState<TrafficRange>("30d");
+  const [specificDateMode, setSpecificDateMode] = React.useState(false);
   const [analyticsView, setAnalyticsView] = React.useState<AnalyticsView>("vehicle-count");
   const [staffRoleFilter, setStaffRoleFilter] = React.useState<StaffRoleFilter>("all");
   const [staffActivities, setStaffActivities] = React.useState<StaffActivityRecord[]>([]);
@@ -218,14 +215,21 @@ export function TrafficAnalytics() {
           </ToggleGroup>
 
           <Select
-            value={range}
+            value={specificDateMode ? "date" : range}
             onValueChange={(value) => {
+              if (value === "date") {
+                setSpecificDateMode(true);
+                window.setTimeout(() => setDatePickerOpen(true), 0);
+                return;
+              }
               if (!isTrafficRange(value)) return;
               setRange(value);
+              setSpecificDateMode(false);
               setSpecificDate(undefined);
+              setDatePickerOpen(false);
             }}
           >
-            <SelectTrigger aria-label="Select analytics date range" className="w-36" size="sm">
+            <SelectTrigger aria-label="Select analytics date range" className="w-40" size="sm">
               <SelectValue />
             </SelectTrigger>
             <SelectContent position="popper" align="end">
@@ -233,6 +237,7 @@ export function TrafficAnalytics() {
                 <SelectItem value="24h">Last 24 hours</SelectItem>
                 <SelectItem value="7d">Last 7 days</SelectItem>
                 <SelectItem value="30d">Last 30 days</SelectItem>
+                <SelectItem value="date">Specific date</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>
@@ -259,70 +264,55 @@ export function TrafficAnalytics() {
             </SelectContent>
           </Select>
 
-          <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
-            <PopoverTrigger asChild>
-              <Button
-                aria-label={
-                  specificDate
-                    ? `Specific analytics date: ${periodLabel}. Open date picker`
-                    : "Select a specific analytics date"
-                }
-                aria-pressed={specificDate !== undefined}
-                className="w-40 justify-start"
-                size="sm"
-                variant={specificDate ? "secondary" : "outline"}
-              >
-                <CalendarDays data-icon="inline-start" />
-                {specificDate ? periodLabel : "Specific date"}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent align="end" className="w-auto gap-0 p-0">
-              <PopoverHeader className="px-3 pt-3 pb-1">
-                <PopoverTitle>Specific date</PopoverTitle>
-                <PopoverDescription>Filter analytics to one full day in Manila time.</PopoverDescription>
-              </PopoverHeader>
-              <Calendar
-                captionLayout="dropdown"
-                disabled={{ after: new Date() }}
-                mode="single"
-                onSelect={(selectedDate) => {
-                  if (!selectedDate) return;
-                  setSpecificDate(selectedDate);
-                  setDatePickerOpen(false);
-                }}
-                selected={specificDate}
-                timeZone="Asia/Manila"
-              />
-              {specificDate ? (
-                <>
-                  <Separator />
-                  <div className="p-2">
-                    <Button
-                      className="w-full"
-                      onClick={() => {
-                        setSpecificDate(undefined);
-                        setDatePickerOpen(false);
-                      }}
-                      size="sm"
-                      variant="ghost"
-                    >
-                      Use {RANGE_LABELS[range]}
-                    </Button>
-                  </div>
-                </>
-              ) : null}
-            </PopoverContent>
-          </Popover>
+          {specificDateMode ? (
+            <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  aria-label={specificDate ? `Selected analytics date: ${periodLabel}` : "Select a specific date"}
+                  className="w-40 justify-start"
+                  size="sm"
+                  variant="outline"
+                >
+                  <CalendarDays data-icon="inline-start" />
+                  {specificDate ? periodLabel : "Select date"}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-auto gap-0 p-0">
+                <Calendar
+                  captionLayout="dropdown"
+                  disabled={{ after: new Date() }}
+                  mode="single"
+                  onSelect={(selectedDate) => {
+                    if (!selectedDate) return;
+                    setSpecificDate(selectedDate);
+                    setDatePickerOpen(false);
+                  }}
+                  selected={specificDate}
+                  timeZone="Asia/Manila"
+                />
+                {specificDate ? (
+                  <>
+                    <Separator />
+                    <div className="p-2">
+                      <Button
+                        className="w-full"
+                        onClick={() => {
+                          setSpecificDateMode(false);
+                          setSpecificDate(undefined);
+                          setDatePickerOpen(false);
+                        }}
+                        size="sm"
+                        variant="ghost"
+                      >
+                        Use {RANGE_LABELS[range]}
+                      </Button>
+                    </div>
+                  </>
+                ) : null}
+              </PopoverContent>
+            </Popover>
+          ) : null}
 
-          <Button
-            aria-label="Refresh Firebase traffic data"
-            disabled={loading}
-            onClick={() => setRefreshKey((value) => value + 1)}
-            size="icon-sm"
-            variant="outline"
-          >
-            {loading ? <Spinner /> : <RefreshCw />}
-          </Button>
         </div>
       </div>
 

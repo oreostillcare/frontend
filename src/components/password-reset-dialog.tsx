@@ -15,7 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
-import { getFirebaseEmailError, sendNativePasswordReset } from "@/lib/firebase/auth-email";
+import { getFirebaseEmailError, sendNativePasswordReset } from "@/shared/firebase/auth-email";
 
 interface PasswordResetTarget {
   id: string;

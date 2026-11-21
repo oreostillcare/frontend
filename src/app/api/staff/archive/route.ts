@@ -6,7 +6,7 @@ import {
   formatStaffDisplayName,
   requireAdministrator,
 } from "@/lib/firebase/admin-staff";
-import { recordStaffActivity } from "@/lib/firebase/staff-activity";
+import { recordStaffActivity } from "@/shared/firebase/staff-activity";
 import { archiveStaffMember } from "@/lib/firebase/staff-lifecycle";
 
 const archiveSchema = z.object({ staffId: z.string().trim().min(1) });

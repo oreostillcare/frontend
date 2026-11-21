@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { adminDb } from "@/lib/firebase/admin";
 import { authenticateStaff, errorResponse, formatStaffDisplayName, requireAdministrator } from "@/lib/firebase/admin-staff";
-import { recordStaffActivity } from "@/lib/firebase/staff-activity";
+import { recordStaffActivity } from "@/shared/firebase/staff-activity";
 
 const activitySchema = z.object({ event: z.enum(["login", "logout"]) });
 

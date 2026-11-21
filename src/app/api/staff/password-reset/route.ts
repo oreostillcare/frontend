@@ -10,7 +10,7 @@ import {
   formatStaffDisplayName,
   getStaffAuthUid,
 } from "@/lib/firebase/admin-staff";
-import { recordStaffActivity } from "@/lib/firebase/staff-activity";
+import { recordStaffActivity } from "@/shared/firebase/staff-activity";
 
 const RESET_COOLDOWN_MS = 180_000;
 const resetSchema = z.object({ staffId: z.string().trim().min(1) });

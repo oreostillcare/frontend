@@ -17,11 +17,11 @@ vi.mock("@/lib/firebase/client", () => ({
   initializeFirebaseAnalytics: mocks.initializeFirebaseAnalytics,
   isFirebaseConfigured: true,
 }));
-vi.mock("@/lib/firebase/staff-access", () => ({
+vi.mock("@/shared/firebase/staff-access", () => ({
   loadAdministratorEmail: vi.fn(),
   subscribeToStaffProfile: mocks.subscribeToStaffProfile,
 }));
-vi.mock("@/lib/firebase/staff-activity-client", () => ({
+vi.mock("@/shared/firebase/staff-activity-client", () => ({
   recordStaffActivityEvent: mocks.recordStaffActivityEvent,
 }));
 

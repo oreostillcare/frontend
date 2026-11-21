@@ -8,7 +8,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { useIsMobile } from "@/hooks/use-mobile";
+import { useIsMobile } from "@/shared/hooks/use-mobile";
 
 const chartData = [
   { date: "2024-04-01", desktop: 222, mobile: 150 },

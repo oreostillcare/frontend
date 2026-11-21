@@ -8,7 +8,7 @@ import {
   Video,
 } from "lucide-react";
 
-import type { StaffRole } from "@/lib/firebase/staff-access";
+import type { StaffRole } from "@/shared/firebase/staff-access";
 
 export type NavBadge = "new" | "soon";
 

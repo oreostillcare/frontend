@@ -16,7 +16,7 @@ import {
   requireAdministrator,
 } from "@/lib/firebase/admin-staff";
 import { reconcileEmailChange } from "@/lib/firebase/email-change-status";
-import { recordStaffActivity } from "@/lib/firebase/staff-activity";
+import { recordStaffActivity } from "@/shared/firebase/staff-activity";
 
 const emailSchema = z.object({ email: z.email(), activityAlreadyLogged: z.boolean().default(false) });
 

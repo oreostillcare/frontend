@@ -36,7 +36,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { TableCell, TableRow } from "@/components/ui/table";
-import { useIsMobile } from "@/hooks/use-mobile";
+import { useIsMobile } from "@/shared/hooks/use-mobile";
 import type { DataTableFeatures } from "@/lib/data-table-features";
 
 import type { ProposalSectionsRow } from "./schema";

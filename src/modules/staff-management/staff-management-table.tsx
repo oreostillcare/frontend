@@ -28,7 +28,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { createPendingVerifiedAccount } from "@/lib/firebase/auth-email";
+import { createPendingVerifiedAccount } from "@/shared/firebase/auth-email";
 import { staffApi } from "@/lib/firebase/staff-api";
 import { subscribeToStaffMembers } from "@/lib/firebase/staff-service";
 import { cn } from "@/lib/utils";

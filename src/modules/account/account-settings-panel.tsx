@@ -11,7 +11,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import type { StaffRole } from "@/lib/firebase/staff-access";
+import type { StaffRole } from "@/shared/firebase/staff-access";
 import { useFirebaseAccount } from "@/modules/logout-route-protection/firebase-account-hook";
 
 function getRoleDescription(role: StaffRole | null) {

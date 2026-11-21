@@ -5,7 +5,7 @@ import { FieldValue, Timestamp } from "firebase-admin/firestore";
 
 import { adminAuth, adminDb } from "./admin";
 import { ApiError, createOpaqueToken, formatStaffDisplayName } from "./admin-staff";
-import { recordStaffActivityFields } from "./staff-activity";
+import { recordStaffActivityFields } from "@/shared/firebase/staff-activity";
 
 export interface EmailChangeResult {
   status: "pending" | "processing" | "completed";

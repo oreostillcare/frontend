@@ -8,7 +8,7 @@ import {
   formatStaffDisplayName,
   requireAdministrator,
 } from "@/lib/firebase/admin-staff";
-import { recordStaffActivity } from "@/lib/firebase/staff-activity";
+import { recordStaffActivity } from "@/shared/firebase/staff-activity";
 import { archiveStaffMember, restoreStaffMember, updateStaffProfile } from "@/lib/firebase/staff-lifecycle";
 
 const updateSchema = z.discriminatedUnion("action", [
