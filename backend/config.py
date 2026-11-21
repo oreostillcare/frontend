@@ -186,6 +186,15 @@ class Settings:
         os.getenv("TRAFFIC_INGEST_SECRET", "") or os.getenv("CRON_SECRET", "")
     ).strip()
     traffic_firestore_timeout_seconds: float = env_float("TRAFFIC_FIRESTORE_TIMEOUT_SECONDS", 5.0)
+    system_logs_enabled: bool = env_bool("ENABLE_SYSTEM_LOGS", True)
+    system_logs_url: str = os.getenv("SYSTEM_LOGS_URL", "http://127.0.0.1:3000/api/system-events").strip()
+    system_logs_secret: str = (
+        os.getenv("SYSTEM_LOGS_SECRET", "")
+        or os.getenv("TRAFFIC_INGEST_SECRET", "")
+        or os.getenv("CRON_SECRET", "")
+    ).strip()
+    system_logs_interval_seconds: float = env_float("SYSTEM_LOGS_INTERVAL_SECONDS", 10.0)
+    system_logs_critical_after: int = max(5, env_int("SYSTEM_LOGS_CRITICAL_AFTER", 5))
     frontend_origins: tuple[str, ...] = env_csv("FRONTEND_ORIGIN", "http://localhost:3000")
     reconnect_seconds: float = env_float("CAMERA_RECONNECT_SECONDS", 3.0)
 

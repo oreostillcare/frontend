@@ -18,6 +18,7 @@ from modules.firebase_persistence.traffic_transaction_firestore import Firestore
 from modules.timer_batching.timer_batch_manager import TimerBatchManager
 from modules.live_monitoring.vehicle_identity import GlobalVehicleRegistry
 from modules.live_monitoring.usb_camera_devices import enumerate_usb_devices, usb_catalog
+from modules.system_logs.system_event_writer import SystemEventWriter, SystemHealthMonitor
 
 display_mirror = getattr(settings, "node_b_display_mirror", False)
 observation_only = display_mirror or getattr(settings, "observation_only", True)
@@ -200,6 +201,13 @@ transaction_writer = FirestoreTransactionWriter(
     timeout_seconds=getattr(settings, "traffic_firestore_timeout_seconds", 5.0),
     enabled=not observation_only and getattr(settings, "traffic_firestore_enabled", False),
 )
+system_event_writer = SystemEventWriter(
+    endpoint=getattr(settings, "system_logs_url", "http://127.0.0.1:3000/api/system-events"),
+    secret=getattr(settings, "system_logs_secret", ""),
+    timeout_seconds=getattr(settings, "traffic_firestore_timeout_seconds", 5.0),
+    enabled=getattr(settings, "system_logs_enabled", False),
+)
+system_health_monitor = None
 priority_controller = PointComparisonController(
     read_points=read_node_points,
     signal_controller=signal_controller,
@@ -212,6 +220,8 @@ priority_controller.start()
 
 
 def stop_workers():
+    if system_health_monitor is not None:
+        system_health_monitor.stop()
     signal_controller.stop_heartbeat()
     priority_controller.stop()
     with workers_lock:
@@ -265,6 +275,21 @@ def camera_payload(camera_id: int):
     if display_mirror and camera_id == 2:
         payload.update(testMirror=True, sourceCamera=1, displayOnline=bool(workers[1].online))
     return payload
+
+
+system_health_monitor = SystemHealthMonitor(
+    writer=system_event_writer,
+    camera_provider=lambda: {
+        camera_id: camera_payload(camera_id) or {}
+        for camera_id in sorted(workers)
+    },
+    controller_provider=signal_controller.heartbeat_snapshot,
+    traffic_provider=priority_controller.snapshot,
+    interval_seconds=getattr(settings, "system_logs_interval_seconds", 10.0),
+    critical_after=getattr(settings, "system_logs_critical_after", 5),
+)
+if system_event_writer.enabled:
+    system_health_monitor.start()
 
 
 def node_payload(node_name: str, camera: dict | None = None) -> dict:

@@ -4,11 +4,12 @@
 
 import { type ChangeEvent, type MouseEvent, useEffect, useMemo, useState } from "react";
 
-import { AlertTriangle, CircleCheck, Database, RefreshCw, Search, SearchX, ServerOff } from "lucide-react";
+import { AlertTriangle, CalendarDays, CircleCheck, Database, RefreshCw, Search, SearchX, ServerOff } from "lucide-react";
 
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
 import {
   Card,
   CardAction,
@@ -29,6 +30,7 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -43,7 +45,7 @@ import {
 
 type SeverityFilter = "all" | SystemEventSeverity;
 type NodeFilter = "all" | "node-a" | "node-b" | "system";
-type RangeFilter = "24h" | "30d" | "7d" | "all";
+type RangeFilter = "24h" | "30d" | "7d" | "all" | "date";
 
 const ROWS_PER_PAGE = 10;
 const SKELETON_ROW_IDS = Array.from({ length: 6 }, (_, index) => `system-log-skeleton-${index + 1}`);
@@ -52,9 +54,6 @@ const SKELETON_COLUMNS = [
   { id: "severity", className: undefined },
   { id: "event", className: undefined },
   { id: "location", className: undefined },
-  { id: "vehicle-count", className: undefined },
-  { id: "signal", className: undefined },
-  { id: "power-source", className: undefined },
   { id: "status", className: "pr-4" },
 ] as const;
 const HOUR_MS = 60 * 60 * 1000;
@@ -80,6 +79,13 @@ const shortDateTimeFormatter = new Intl.DateTimeFormat("en-PH", {
   timeZone: "Asia/Manila",
 });
 
+const manilaDateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
+  day: "2-digit",
+  month: "2-digit",
+  timeZone: "Asia/Manila",
+  year: "numeric",
+});
+
 const nodeLabels: Record<string, string> = {
   "node-a": "Node A",
   "node-b": "Node B",
@@ -92,17 +98,23 @@ const severityVariants = {
   warning: "secondary",
 } as const satisfies Record<SystemEventSeverity, "destructive" | "outline" | "secondary">;
 
+const severityColors: Record<SystemEventSeverity, string> = {
+  critical: "border-destructive",
+  info: "border-green-600 bg-green-50 text-green-700 dark:border-green-500 dark:bg-green-950/30 dark:text-green-300",
+  warning: "border-yellow-600 bg-yellow-50 text-yellow-800 dark:border-yellow-500 dark:bg-yellow-950/30 dark:text-yellow-300",
+};
+
 const statusVariants = {
   active: "destructive",
   observed: "outline",
   resolved: "secondary",
 } as const satisfies Record<SystemEventStatus, "destructive" | "outline" | "secondary">;
 
-const signalVariants = {
-  GREEN: "secondary",
-  RED: "destructive",
-  UNKNOWN: "outline",
-} as const;
+const statusColors: Record<SystemEventStatus, string> = {
+  active: "border-destructive",
+  observed: "border-yellow-600 bg-yellow-50 text-yellow-800 dark:border-yellow-500 dark:bg-yellow-950/30 dark:text-yellow-300",
+  resolved: "border-green-600 bg-green-50 text-green-700 dark:border-green-500 dark:bg-green-950/30 dark:text-green-300",
+};
 
 function formatLabel(value: string) {
   return value.replace(/[-_]+/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
@@ -123,6 +135,10 @@ function rangeStart(range: RangeFilter) {
   return Number.NEGATIVE_INFINITY;
 }
 
+function isSameManilaDay(first: Date, second: Date) {
+  return manilaDateKeyFormatter.format(first) === manilaDateKeyFormatter.format(second);
+}
+
 function isSeverityFilter(value: string): value is SeverityFilter {
   return value === "all" || value === "info" || value === "warning" || value === "critical";
 }
@@ -132,7 +148,7 @@ function isNodeFilter(value: string): value is NodeFilter {
 }
 
 function isRangeFilter(value: string): value is RangeFilter {
-  return value === "24h" || value === "7d" || value === "30d" || value === "all";
+  return value === "24h" || value === "7d" || value === "30d" || value === "all" || value === "date";
 }
 
 function getConnectionLabel(error: string | null, loading: boolean) {
@@ -199,6 +215,8 @@ export function SystemLogs() {
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
   const [nodeFilter, setNodeFilter] = useState<NodeFilter>("all");
   const [rangeFilter, setRangeFilter] = useState<RangeFilter>("7d");
+  const [specificDate, setSpecificDate] = useState<Date>();
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [requestedPage, setRequestedPage] = useState(1);
   const [subscriptionVersion, setSubscriptionVersion] = useState(0);
 
@@ -221,6 +239,9 @@ export function SystemLogs() {
     const earliestTimestamp = rangeStart(rangeFilter);
 
     return events.filter((event) => {
+      if (rangeFilter === "date") {
+        if (!specificDate || !isSameManilaDay(event.occurredAt, specificDate)) return false;
+      }
       if (event.occurredAt.getTime() < earliestTimestamp) return false;
       if (severityFilter !== "all" && event.severity !== severityFilter) return false;
       if (nodeFilter !== "all" && event.nodeId !== nodeFilter) return false;
@@ -238,7 +259,7 @@ export function SystemLogs() {
       ];
       return searchableValues.some((value) => value.toLowerCase().includes(normalizedQuery));
     });
-  }, [events, nodeFilter, rangeFilter, searchQuery, severityFilter]);
+  }, [events, nodeFilter, rangeFilter, searchQuery, severityFilter, specificDate]);
 
   const metrics = useMemo(() => {
     const activeAlerts = events.filter(
@@ -293,6 +314,7 @@ export function SystemLogs() {
     if (!isRangeFilter(value)) return;
     setRangeFilter(value);
     resetPage();
+    if (value === "date") setDatePickerOpen(true);
   };
 
   const handlePagination = (event: MouseEvent<HTMLAnchorElement>, page: number) => {
@@ -376,7 +398,7 @@ export function SystemLogs() {
         </CardHeader>
 
         <CardContent className="flex flex-col gap-4 px-0">
-          <div className="grid gap-2 px-4 sm:grid-cols-2 xl:grid-cols-[minmax(14rem,1fr)_10rem_10rem_10rem]">
+          <div className="grid gap-2 px-4 sm:grid-cols-2 xl:grid-cols-[minmax(14rem,1fr)_10rem_10rem_10rem_10rem]">
             <div>
               <label className="sr-only" htmlFor="system-log-search">
                 Search system logs
@@ -447,11 +469,42 @@ export function SystemLogs() {
                     <SelectItem value="24h">Last 24 hours</SelectItem>
                     <SelectItem value="7d">Last 7 days</SelectItem>
                     <SelectItem value="30d">Last 30 days</SelectItem>
+                    <SelectItem value="date">Specific date</SelectItem>
                     <SelectItem value="all">All loaded</SelectItem>
                   </SelectGroup>
                 </SelectContent>
               </Select>
             </div>
+
+            {rangeFilter === "date" ? (
+              <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    aria-label="Select a specific system log date"
+                    className="w-full justify-start font-normal"
+                    variant="outline"
+                  >
+                    <CalendarDays data-icon="inline-start" />
+                    {specificDate ? dateFormatter.format(specificDate) : "Select date"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-auto p-0">
+                  <Calendar
+                    captionLayout="dropdown"
+                    disabled={{ after: new Date() }}
+                    mode="single"
+                    onSelect={(selectedDate) => {
+                      if (!selectedDate) return;
+                      setSpecificDate(selectedDate);
+                      setRequestedPage(1);
+                      setDatePickerOpen(false);
+                    }}
+                    selected={specificDate}
+                    timeZone="Asia/Manila"
+                  />
+                </PopoverContent>
+              </Popover>
+            ) : null}
           </div>
 
           <Table id="system-logs-table" aria-label="System hardware event history">
@@ -461,9 +514,6 @@ export function SystemLogs() {
                 <TableHead>Severity</TableHead>
                 <TableHead>Event</TableHead>
                 <TableHead>Lane / Node</TableHead>
-                <TableHead>Vehicle Count</TableHead>
-                <TableHead>Signal</TableHead>
-                <TableHead>Power Source</TableHead>
                 <TableHead className="pr-4">Status</TableHead>
               </TableRow>
             </TableHeader>
@@ -489,7 +539,9 @@ export function SystemLogs() {
                         </time>
                       </TableCell>
                       <TableCell>
-                        <Badge variant={severityVariants[event.severity]}>{formatLabel(event.severity)}</Badge>
+                        <Badge variant={severityVariants[event.severity]} className={severityColors[event.severity]}>
+                          {formatLabel(event.severity)}
+                        </Badge>
                       </TableCell>
                       <TableCell className="max-w-80 whitespace-normal">
                         <div className="flex flex-col gap-0.5">
@@ -505,29 +557,17 @@ export function SystemLogs() {
                           <span className="text-xs text-muted-foreground">{event.laneId ?? "System-wide"}</span>
                         </div>
                       </TableCell>
-                      <TableCell className="tabular-nums">{event.vehicleCount ?? "--"}</TableCell>
-                      <TableCell>
-                        {event.signal ? <Badge variant={signalVariants[event.signal]}>{event.signal}</Badge> : "--"}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-0.5">
-                          <span>{event.powerSource ?? "--"}</span>
-                          {event.batteryPercent !== undefined ? (
-                            <span className="text-xs text-muted-foreground tabular-nums">
-                              Battery {Math.round(event.batteryPercent)}%
-                            </span>
-                          ) : null}
-                        </div>
-                      </TableCell>
                       <TableCell className="pr-4">
-                        <Badge variant={statusVariants[event.eventStatus]}>{formatLabel(event.eventStatus)}</Badge>
+                        <Badge variant={statusVariants[event.eventStatus]} className={statusColors[event.eventStatus]}>
+                          {formatLabel(event.eventStatus)}
+                        </Badge>
                       </TableCell>
                     </TableRow>
                   ))}
 
               {!loading && visibleEvents.length === 0 ? (
                 <TableRow>
-                  <TableCell className="whitespace-normal" colSpan={8}>
+                  <TableCell className="whitespace-normal" colSpan={5}>
                     <Empty className="min-h-48">
                       <EmptyHeader>
                         <EmptyMedia variant="icon">
