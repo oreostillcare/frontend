@@ -57,6 +57,11 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /emailTemplates/{templateId} {
+      allow read: if activeStaff();
+      allow write: if false;
+    }
+
     match /staffActivity/{activityId} {
       allow read: if administrator();
       allow write: if false;

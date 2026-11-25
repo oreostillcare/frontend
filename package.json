@@ -31,6 +31,8 @@
     "seed:traffic": "node --env-file=.env src/scripts/seed-traffic-events.mjs",
     "seed:traffic:clear": "node --env-file=.env src/scripts/seed-traffic-events.mjs --delete",
     "seed:node-sessions": "node --env-file=.env src/scripts/seed-node-session-logs.mjs",
+    "seed:email-templates": "node --env-file=.env src/scripts/seed-email-templates.mjs",
+    "seed:email-templates:clear": "node --env-file=.env src/scripts/seed-email-templates.mjs --delete",
     "seed:system": "node --env-file=.env src/scripts/seed-system-events.mjs",
     "seed:system:clear": "node --env-file=.env src/scripts/seed-system-events.mjs --delete"
   },

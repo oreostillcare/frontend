@@ -1,6 +1,9 @@
 import { z } from "zod";
 
 import { adminDb } from "@/lib/firebase/admin";
+import { notifySystemEvent } from "@/modules/notifications/system-event-notifications";
+
+export const runtime = "nodejs";
 
 const systemEventSchema = z.object({
   occurredAt: z.string().datetime({ offset: true }),
@@ -45,7 +48,28 @@ export async function POST(request: Request) {
       occurredAt: new Date(event.occurredAt),
       createdAt: new Date(),
       source: "backend",
+      notification: {
+        provider: "mailjet",
+        status: "pending",
+        attempts: 0,
+      },
     });
+    try {
+      await notifySystemEvent(reference, { ...event, eventId: reference.id, occurredAt: new Date(event.occurredAt) });
+    } catch (notificationError) {
+      // Keep the persisted event usable even when a provider or recipient lookup is unavailable.
+      console.error("System event notification dispatch failed:", notificationError);
+      await reference
+        .update({
+          notification: {
+            provider: "mailjet",
+            status: "failed",
+            reason: "dispatch_failed",
+            attempts: 1,
+          },
+        })
+        .catch(() => undefined);
+    }
     return Response.json({ success: true, eventId: reference.id });
   } catch (error) {
     console.error("System event persistence failed:", error);

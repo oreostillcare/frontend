@@ -1,0 +1,22 @@
+[
+  {
+    "id": "system-alert",
+    "name": "System alert",
+    "description": "Informative email for the first warning detected by SmartRoad.",
+    "recipientGroup": "all-active-staff",
+    "subject": "[SmartRoad {{severity}} Alert] {{event}} — {{node}}",
+    "textBody": "Hello SmartRoad team,\n\nSmartRoad detected a {{severity}} system event affecting {{node}} on {{lane}} at {{time}}.\n\n{{event}}: {{details}}\n\nCurrent status: {{status}}.\nRecommended action: {{action}}\n\nPlease review the SmartRoad System Logs for the latest details.\n\n— SmartRoad Alerts",
+    "htmlBody": "<p>Hello SmartRoad team,</p><p>SmartRoad detected a <strong>{{severity}}</strong> system event affecting <strong>{{node}}</strong> on <strong>{{lane}}</strong> at <strong>{{time}}</strong>.</p><p><strong>{{event}}:</strong> {{details}}</p><p><strong>Current status:</strong> {{status}}<br><strong>Recommended action:</strong> {{action}}</p><p>Please review the SmartRoad System Logs for the latest details.</p><p>— SmartRoad Alerts</p>",
+    "variables": ["severity", "event", "node", "lane", "time", "status", "details", "action"]
+  },
+  {
+    "id": "major-event",
+    "name": "Major event alert",
+    "description": "High-priority email for persistent critical failures or compromised nodes.",
+    "recipientGroup": "all-active-staff",
+    "subject": "[SmartRoad Critical Alert] {{event}} — {{node}}",
+    "textBody": "CRITICAL SMARTROAD ALERT\n\nSmartRoad detected a critical issue affecting {{node}} on {{lane}} at {{time}}.\n\n{{event}}: {{details}}\n\nCurrent status: {{status}}.\nRequired action: {{action}}\n\nPlease review the SmartRoad System Logs and take action promptly.\n\n— SmartRoad Alerts",
+    "htmlBody": "<p><strong>CRITICAL SMARTROAD ALERT</strong></p><p>SmartRoad detected a critical issue affecting <strong>{{node}}</strong> on <strong>{{lane}}</strong> at <strong>{{time}}</strong>.</p><p><strong>{{event}}:</strong> {{details}}</p><p><strong>Current status:</strong> {{status}}<br><strong>Required action:</strong> {{action}}</p><p>Please review the SmartRoad System Logs and take action promptly.</p><p>— SmartRoad Alerts</p>",
+    "variables": ["event", "node", "lane", "time", "status", "details", "action"]
+  }
+]
